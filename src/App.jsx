@@ -210,6 +210,9 @@ export default function App(){
   const [unlocked,setUnlocked]=useState([])
   const [syncing,setSyncing]=useState(false)
   const [lastSync,setLastSync]=useState(null)
+  const [log,setLog]=useState([])
+  const [username,setUsername]=useState('')
+  const [nameInput,setNameInput]=useState('')
 
   const loadAll=async()=>{
     setSyncing(true)
@@ -223,6 +226,7 @@ export default function App(){
   }
 
   useEffect(()=>{
+    try{const u=localStorage.getItem('sw_username');if(u)setUsername(u)}catch{}
     loadAll()
     const channel=supabase.channel('swimpay-rt').on('postgres_changes',{event:'UPDATE',schema:'public',table:'app_data'},({new:row})=>{
       const v=JSON.parse(row.value)
@@ -243,7 +247,7 @@ export default function App(){
   const sv=async(k,d,fn)=>{fn(d);await dbSet(k,d)}
 
   const addLog=async(action,description)=>{
-    const user=localStorage.getItem('sw_username')||'Onbekend'
+    let user='Onbekend';try{user=localStorage.getItem('sw_username')||'Onbekend'}catch{}
     const entry={id:uid(),timestamp:new Date().toISOString(),user,action,description}
     const current=await dbGet('sw_log')||[]
     const newLog=[entry,...current].slice(0,2000)
@@ -253,7 +257,7 @@ export default function App(){
 
   const confirmName=()=>{
     if(!nameInput.trim())return
-    localStorage.setItem('sw_username',nameInput.trim())
+    try{localStorage.setItem('sw_username',nameInput.trim())}catch{}
     setUsername(nameInput.trim())
   }
   const TABS=[{k:'dashboard',l:'Dashboard'},{k:'overzicht',l:'Overzicht lessen'},{k:'uren',l:'Uren invoeren'},{k:'maand',l:'Maandoverzicht'},{k:'notities',l:'Notities'},{k:'lsg',l:'Lesgevers'},{k:'logboek',l:'Logboek'}]
@@ -278,7 +282,7 @@ export default function App(){
         {tab==='maand'&&<Maand inst={inst} entries={entries} paid={paid} onSavePaid={d=>sv('sw_paid',d,setPaid)} onRefresh={loadAll} onLog={addLog}/>}
         {tab==='notities'&&<Notities sched={sched} att={att} inst={inst} notes={notes} onSaveNotes={d=>sv('sw_notes',d,setNotes)}/>}
         {tab==='lsg'&&<Lesgevers inst={inst} onSave={d=>sv('sw_inst',d,setInst)} onLog={addLog}/>}
-        {tab==='logboek'&&<Logboek log={log} username={username} onChangeUser={()=>{localStorage.removeItem('sw_username');setUsername('');setNameInput('')}}/>}
+        {tab==='logboek'&&<Logboek log={log} username={username} onChangeUser={()=>{try{localStorage.removeItem('sw_username')}catch{};setUsername('');setNameInput('')}}/>}
 
       {/* Username modal */}
       {!username&&(
