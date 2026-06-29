@@ -17,7 +17,7 @@ function getDayDate(mon,dag){return addDays(mon,DAY_IDX[dag]||0)}
 function fmtShort(ds){return new Date(ds).toLocaleDateString('nl-BE',{day:'numeric',month:'short'})}
 function fmtDate(ds){return new Date(ds).toLocaleDateString('nl-BE',{day:'numeric',month:'long',year:'numeric'})}
 function parseDuur(s){if(!s)return 2;const m=s.match(/(\d+)u(\d+)?/);if(!m)return 2;return parseInt(m[1])+(m[2]?parseInt(m[2])/60:0)}
-function parseKey(key){const i1=key.indexOf('_'),i2=key.indexOf('_',i1+1),i3=key.indexOf('_',i2+1);return{wk:key.slice(0,i1),locId:key.slice(i1+1,i2),sessId:key.slice(i2+1,i3),name:key.slice(i3+1)}}
+function parseKey(key){const i1=key.indexOf('_'),i2=key.indexOf('_',i1+1),i3=key.indexOf('_',i2+1);const mk=key.slice(i3+1);const[name,memberRole]=mk.includes('|')?mk.split('|'):[mk,'lesgever'];return{wk:key.slice(0,i1),locId:key.slice(i1+1,i2),sessId:key.slice(i2+1,i3),mk,name,memberRole}}
 
 const Z=(id,n,k,v,c,r,ib='',em='')=>({id,name:n,status:'zelfstandige',email:em,rates:{kids:k,volwassenen:v,coordinator:c||v,redder:r||0,onthaalmedewerker:12.5,toezichter:14,hulp_coordinator_np:0,hulp_coordinator_p:10},iban:ib})
 const V=(id,n,k,v,c,r,o,ib='',em='')=>({id,name:n,status:'vrijwilliger',email:em,rates:{kids:k,volwassenen:v,coordinator:c||0,redder:r||0,onthaalmedewerker:o||0,toezichter:14,hulp_coordinator_np:0,hulp_coordinator_p:12.5},iban:ib})
@@ -265,11 +265,12 @@ function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt}){
       Object.keys(att[wk][locId]).forEach(sessId=>{
         const sess=loc.sessions.find(s=>s.id===sessId);if(!sess)return
         const date=getDayDate(wk,sess.dag)
-        Object.keys(att[wk][locId][sessId]).forEach(name=>{
-          const a=att[wk][locId][sessId][name]
+        Object.keys(att[wk][locId][sessId]).forEach(mk=>{
+          const a=att[wk][locId][sessId][mk]
+          const[name,memberRole]=mk.includes('|')?mk.split('|'):[mk,'lesgever']
           if(a.aanwezig===false){
-            const key=`${wk}_${locId}_${sessId}_${name}`
-            r.push({key,name,locId,locName:loc.name,sessId,dag:sess.dag,type:sess.type,date,week:wk,sub:a.sub||''})
+            const key=`${wk}_${locId}_${sessId}_${mk}`
+            r.push({key,name,memberRole,mk,locId,locName:loc.name,sessId,dag:sess.dag,type:sess.type,date,week:wk,sub:a.sub||''})
           }
         })
       })
@@ -284,18 +285,18 @@ function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt}){
   const setC=(key,patch)=>onSaveComm({...comm,[key]:{...getC(key),...patch}})
   const confirmC=key=>onSaveComm({...comm,[key]:{...getC(key),done:true}})
   const updateSub=(key,sub)=>{
-    const{wk,locId,sessId,name}=parseKey(key)
+    const{wk,locId,sessId,mk}=parseKey(key)
     const next=JSON.parse(JSON.stringify(att))
     if(!next[wk])next[wk]={};if(!next[wk][locId])next[wk][locId]={};if(!next[wk][locId][sessId])next[wk][locId][sessId]={}
-    next[wk][locId][sessId][name]={...(next[wk][locId][sessId][name]||{}),aanwezig:false,sub}
+    next[wk][locId][sessId][mk]={...(next[wk][locId][sessId][mk]||{}),aanwezig:false,sub}
     onSaveAtt(next)
   }
   const consec=useMemo(()=>{
-    const g={};monthAbs.forEach(a=>{const k=`${a.name}||${a.locId}||${a.sessId}`;if(!g[k])g[k]={name:a.name,locName:a.locName,dag:a.dag,type:a.type,weeks:[],subs:[]};g[k].weeks.push(a.week);g[k].subs.push(a.sub)})
+    const g={};monthAbs.forEach(a=>{const k=`${a.name}||${a.memberRole||'lesgever'}||${a.locId}||${a.sessId}`;if(!g[k])g[k]={name:a.name,memberRole:a.memberRole,locName:a.locName,dag:a.dag,type:a.type,weeks:[],subs:[]};g[k].weeks.push(a.week);g[k].subs.push(a.sub)})
     return Object.values(g).filter(g=>{if(g.weeks.length<2)return false;const s=[...g.weeks].sort();for(let i=1;i<s.length;i++)if(addDays(s[i-1],7)===s[i])return true;return false}).sort((a,b)=>b.weeks.length-a.weeks.length)
   },[monthAbs])
   const single=useMemo(()=>{
-    const g={};monthAbs.forEach(a=>{const k=`${a.name}||${a.locId}||${a.sessId}`;if(!g[k])g[k]={name:a.name,locName:a.locName,dag:a.dag,type:a.type,weeks:[],subs:[]};g[k].weeks.push(a.week);g[k].subs.push(a.sub)})
+    const g={};monthAbs.forEach(a=>{const k=`${a.name}||${a.memberRole||'lesgever'}||${a.locId}||${a.sessId}`;if(!g[k])g[k]={name:a.name,memberRole:a.memberRole,locName:a.locName,dag:a.dag,type:a.type,weeks:[],subs:[]};g[k].weeks.push(a.week);g[k].subs.push(a.sub)})
     return Object.values(g).filter(g=>g.weeks.length===1).sort((a,b)=>a.name.localeCompare(b.name))
   },[monthAbs])
   const commOpen=commRows.filter(a=>{const c=getC(a.key);return!c.overeenkomst||!c.contactOuders||!c.niveaus}).length
@@ -333,7 +334,7 @@ function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt}){
                 <td style={S.td}>{a.dag}</td>
                 <td style={{...S.td,fontWeight:500}}>{a.locName}</td>
                 <td style={S.td}><TypeBadge type={a.type}/></td>
-                <td style={{...S.td,fontWeight:600}}>{a.name}</td>
+                <td style={{...S.td,fontWeight:600}}>{a.name}{a.memberRole&&a.memberRole!=='lesgever'&&<span style={{marginLeft:5,fontSize:11,padding:'1px 6px',borderRadius:20,background:RC[a.memberRole]?.[0]||'#f1f5f9',color:RC[a.memberRole]?.[1]||'#475569',fontWeight:600}}>{a.memberRole}</span>}</td>
                 <td style={{...S.td,minWidth:175}}>
                   <div style={{display:'flex',alignItems:'center',gap:5}}>
                     <input list={`sl-${i}`} value={a.sub} onChange={e=>updateSub(a.key,e.target.value)} placeholder="Naam vervanger..." style={{...S.inp,width:160,padding:'4px 8px',background:a.sub?'#f0fdf4':'#fff8ed',borderColor:a.sub?'#86efac':'#fb923c',color:a.sub?'#166534':'#92400e'}}/>
@@ -380,7 +381,7 @@ function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt}){
       <div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
         <thead><tr style={{borderBottom:'2px solid #f1f5f9'}}>{['Naam','Locatie','Dag','Sessie','Datum','Vervanger'].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
         <tbody>{single.map((g,i)=>(<tr key={i} style={{borderBottom:'1px solid #f8fafc',background:i%2?'#fafcff':'#fff'}}>
-          <td style={{...S.td,fontWeight:600}}>{g.name}</td><td style={S.td}>{g.locName}</td><td style={S.td}>{g.dag}</td><td style={S.td}><TypeBadge type={g.type}/></td>
+          <td style={{...S.td,fontWeight:600}}>{g.name}{g.memberRole&&g.memberRole!=='lesgever'&&<span style={{marginLeft:5,fontSize:11,padding:'1px 6px',borderRadius:20,background:RC[g.memberRole]?.[0]||'#f1f5f9',color:RC[g.memberRole]?.[1]||'#475569',fontWeight:600}}>{g.memberRole}</span>}</td><td style={S.td}>{g.locName}</td><td style={S.td}>{g.dag}</td><td style={S.td}><TypeBadge type={g.type}/></td>
           <td style={S.td}>{fmtShort(getDayDate(g.weeks[0],g.dag))}</td>
           <td style={S.td}>{g.subs[0]?<span style={{padding:'2px 8px',borderRadius:20,fontSize:12,fontWeight:600,background:'#dcfce7',color:'#166534'}}>{g.subs[0]}</span>:<span style={{padding:'2px 8px',borderRadius:20,fontSize:12,fontWeight:600,background:'#fee2e2',color:'#dc2626'}}>Geen</span>}</td>
         </tr>))}</tbody>
@@ -402,16 +403,18 @@ function Overzicht({sched,inst,entries,att,unlocked,onSaveEntries,onSaveAtt,onSa
   const curLoc=sched.find(l=>l.locId===loc)
   const weekEnd=addDays(week,6)
 
-  const getAtt=(sessId,name,duur)=>{
-    const b=att[week]?.[loc]?.[sessId]?.[name]
+  const getAtt=(sessId,name,role,duur)=>{
+    const mk=`${name}|${role||'lesgever'}`
+    const b=att[week]?.[loc]?.[sessId]?.[mk]
     const defH=parseDuur(duur).toString()
     if(!b)return{aanwezig:true,sub:'',hours:defH,note:''}
     return{aanwezig:b.aanwezig!==false,sub:b.sub||'',hours:b.hours!==undefined&&b.hours!==''?b.hours:defH,note:b.note||''}
   }
-  const setMA=(sessId,name,duur,patch)=>{
+  const setMA=(sessId,name,role,duur,patch)=>{
+    const mk=`${name}|${role||'lesgever'}`
     const next=JSON.parse(JSON.stringify(att))
     if(!next[week])next[week]={};if(!next[week][loc])next[week][loc]={};if(!next[week][loc][sessId])next[week][loc][sessId]={}
-    next[week][loc][sessId][name]={...getAtt(sessId,name,duur),...patch}
+    next[week][loc][sessId][mk]={...getAtt(sessId,name,role,duur),...patch}
     onSaveAtt(next)
   }
   const sessRef=sessId=>`${week}_${loc}_${sessId}`
@@ -424,7 +427,7 @@ function Overzicht({sched,inst,entries,att,unlocked,onSaveEntries,onSaveAtt,onSa
     const base=isRedo?entries.filter(e=>e._sessRef!==ref):entries
     const date=getDayDate(week,sess.dag),locName=curLoc.name,newE=[]
     sess.members.forEach(m=>{
-      const a=getAtt(sess.id,m.name,sess.duur)
+      const a=getAtt(sess.id,m.name,m.role,sess.duur)
       const lt=m.role==='lesgever'?sess.type:m.role
       if(a.aanwezig!==false&&parseFloat(a.hours||0)>0&&!isNaN(parseFloat(a.hours))){const f=inst.find(i=>i.name===m.name);if(f)newE.push({id:uid(),instId:f.id,date,loc:locName,lt,hours:parseFloat(a.hours)||0,note:'',_sessRef:ref})}
       else if(!a.aanwezig&&a.sub&&parseFloat(a.hours||0)>0&&!isNaN(parseFloat(a.hours))){const f=inst.find(i=>i.name===a.sub);if(f)newE.push({id:uid(),instId:f.id,date,loc:locName,lt,hours:parseFloat(a.hours)||0,note:`Vervanger voor ${m.name}`,_sessRef:ref})}
@@ -489,20 +492,20 @@ function Overzicht({sched,inst,entries,att,unlocked,onSaveEntries,onSaveAtt,onSa
           {!editMode&&sess.substitutes.length>0&&<div style={{padding:'4px 13px',background:'#fffbeb',borderBottom:'1px solid #fef3c7',fontSize:11,color:'#92400e'}}><b>Vervangers: </b>{sess.substitutes.join(', ')}</div>}
           <div style={{padding:'9px 13px'}}>
             {sess.members.map((m,i)=>{
-              const a=getAtt(sess.id,m.name,sess.duur);const present=a.aanwezig!==false
+              const a=getAtt(sess.id,m.name,m.role,sess.duur);const present=a.aanwezig!==false
               return(<div key={i} style={{marginBottom:7}}>
                 <div style={{display:'flex',alignItems:'center',gap:5,flexWrap:'wrap',marginBottom:present?0:4}}>
                   {m.role!=='lesgever'&&<span style={{fontSize:10,padding:'1px 5px',borderRadius:20,background:RC[m.role]?.[0]||'#f1f5f9',color:RC[m.role]?.[1]||'#334155',fontWeight:600}}>{m.role}</span>}
-                  <button onClick={()=>setMA(sess.id,m.name,sess.duur,{aanwezig:!present})} style={{padding:'4px 10px',borderRadius:20,border:'none',cursor:'pointer',fontWeight:600,fontSize:13,fontFamily:'inherit',background:present?'#dbeafe':'#fee2e2',color:present?'#1e3a8a':'#991b1b'}}>{m.name}</button>
+                  <button onClick={()=>setMA(sess.id,m.name,m.role,sess.duur,{aanwezig:!present})} style={{padding:'4px 10px',borderRadius:20,border:'none',cursor:'pointer',fontWeight:600,fontSize:13,fontFamily:'inherit',background:present?'#dbeafe':'#fee2e2',color:present?'#1e3a8a':'#991b1b'}}>{m.name}</button>
                   <div style={{display:'flex',alignItems:'center',gap:3}}>
-                    <input type="number" step="0.25" min="0" max="12" value={a.hours} onChange={e=>setMA(sess.id,m.name,sess.duur,{hours:e.target.value})} style={{...S.inp,width:50,textAlign:'center',padding:'3px 5px',background:present?'#fff':'#fff8ed',borderColor:present?'#e2e8f0':'#fb923c'}}/>
+                    <input type="number" step="0.25" min="0" max="12" value={a.hours} onChange={e=>setMA(sess.id,m.name,m.role,sess.duur,{hours:e.target.value})} style={{...S.inp,width:50,textAlign:'center',padding:'3px 5px',background:present?'#fff':'#fff8ed',borderColor:present?'#e2e8f0':'#fb923c'}}/>
                     <span style={{fontSize:11,color:'#94a3b8'}}>u</span>
                   </div>
-                  {!present&&<input list={`sl-${sess.id}-${i}`} placeholder="Vervanger..." value={a.sub} onChange={e=>setMA(sess.id,m.name,sess.duur,{sub:e.target.value})} style={{...S.inp,width:145,background:'#fff8ed',borderColor:a.sub?'#22c55e':'#fb923c',color:'#92400e',padding:'3px 8px'}}/>}
+                  {!present&&<input list={`sl-${sess.id}-${i}`} placeholder="Vervanger..." value={a.sub} onChange={e=>setMA(sess.id,m.name,m.role,sess.duur,{sub:e.target.value})} style={{...S.inp,width:145,background:'#fff8ed',borderColor:a.sub?'#22c55e':'#fb923c',color:'#92400e',padding:'3px 8px'}}/>}
                   <datalist id={`sl-${sess.id}-${i}`}>{sess.substitutes.map(s=><option key={s} value={s}/>)}{inames.map(n=><option key={n} value={n}/>)}</datalist>
                 </div>
                 {!present&&<div style={{marginLeft:4,marginTop:4}}>
-                  <input placeholder="Notitie voor vervanger (optioneel)..." value={a.note} onChange={e=>setMA(sess.id,m.name,sess.duur,{note:e.target.value})} style={{...S.inp,width:'100%',padding:'4px 9px',fontSize:12,background:'#f8fafc',borderColor:'#e2e8f0'}}/>
+                  <input placeholder="Notitie voor vervanger (optioneel)..." value={a.note} onChange={e=>setMA(sess.id,m.name,m.role,sess.duur,{note:e.target.value})} style={{...S.inp,width:'100%',padding:'4px 9px',fontSize:12,background:'#f8fafc',borderColor:'#e2e8f0'}}/>
                 </div>}
               </div>)
             })}
