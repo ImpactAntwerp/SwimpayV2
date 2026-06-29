@@ -241,7 +241,7 @@ export default function App(){
         {tab==='dashboard'&&<Dashboard sched={sched} att={att} inst={inst} comm={comm} onSaveComm={d=>sv('sw_comm',d,setComm)} onSaveAtt={d=>sv('sw_att',d,setAtt)}/>}
         {tab==='overzicht'&&<Overzicht sched={sched} inst={inst} entries={entries} att={att} unlocked={unlocked} onSaveEntries={d=>sv('sw_ent',d,setEntries)} onSaveAtt={d=>sv('sw_att',d,setAtt)} onSaveSched={d=>sv('sw_sched',d,setSched)} onSaveUnlocked={d=>sv('sw_unlocked',d,setUnlocked)}/>}
         {tab==='uren'&&<Uren inst={inst} entries={entries} onSave={d=>sv('sw_ent',d,setEntries)}/>}
-        {tab==='maand'&&<Maand inst={inst} entries={entries} paid={paid} onSavePaid={d=>sv('sw_paid',d,setPaid)} onSaveEntries={d=>sv('sw_ent',d,setEntries)}/>}
+        {tab==='maand'&&<Maand inst={inst} entries={entries} paid={paid} onSavePaid={d=>sv('sw_paid',d,setPaid)} onRefresh={loadAll}/>}
         {tab==='notities'&&<Notities sched={sched} att={att} inst={inst} notes={notes} onSaveNotes={d=>sv('sw_notes',d,setNotes)}/>}
         {tab==='lsg'&&<Lesgevers inst={inst} onSave={d=>sv('sw_inst',d,setInst)}/>}
       </main>
@@ -583,8 +583,15 @@ function Uren({inst,entries,onSave}){
 }
 
 // ─── MAANDOVERZICHT ───────────────────────────────────────────────────────────
-function Maand({inst,entries,paid,onSavePaid,onSaveEntries}){
-  const now=new Date();const[mo,setMo]=useState(now.getMonth());const[yr,setYr]=useState(now.getFullYear());const[expanded,setExpanded]=useState({});const[scanModal,setScanModal]=useState(false);const[scanResult,setScanResult]=useState(null)
+function Maand({inst,entries,paid,onSavePaid,onRefresh}){
+  const now=new Date();const[mo,setMo]=useState(now.getMonth());const[yr,setYr]=useState(now.getFullYear());const[expanded,setExpanded]=useState({})
+  const[herberekend,setHerberekend]=useState(false)
+  const handleHerbereken=async()=>{
+    await onRefresh()
+    setHerberekend(true)
+    setTimeout(()=>setHerberekend(false),2500)
+  }
+
   const ms=`${yr}-${String(mo+1).padStart(2,'0')}`
   const me=entries.filter(e=>e.date&&e.date.startsWith(ms))
   const sum=useMemo(()=>{const m={};me.forEach(e=>{if(!m[e.instId]){m[e.instId]={};LT.forEach(t=>{m[e.instId][t]={h:0,a:0}})}const r=parseFloat(inst.find(i=>i.id===e.instId)?.rates?.[e.lt])||0;if(!m[e.instId][e.lt])m[e.instId][e.lt]={h:0,a:0};m[e.instId][e.lt].h+=e.hours;m[e.instId][e.lt].a+=r*e.hours});return m},[me,inst])
@@ -592,37 +599,6 @@ function Maand({inst,entries,paid,onSavePaid,onSaveEntries}){
   const pKey=(instId)=>`${yr}_${mo}_${instId}`
   const isPaid=instId=>paid[pKey(instId)]||false
   const togPaid=instId=>{const k=pKey(instId);onSavePaid({...paid,[k]:!paid[k]})}
-
-  // Scan voor verdachte duplicaten
-  const scanEntries=()=>{
-    const seen={};const dups=[];const dupIds=new Set()
-    me.forEach(e=>{
-      const key=`${e.instId}_${e.date}_${e.lt}_${e.loc}`
-      if(seen[key]){
-        // Beide entries zijn verdacht - hou de eerste, markeer de rest
-        if(!dupIds.has(seen[key]))dups.push({id:seen[key],ref:'eerste'})
-        dups.push({id:e.id,ref:'duplicaat'})
-        dupIds.add(e.id)
-      } else {seen[key]=e.id}
-    })
-    // Alleen de duplicaten (niet de eerste)
-    const toRemove=me.filter(e=>dupIds.has(e.id))
-    setScanResult({total:me.length,dupCount:toRemove.length,toRemove,dupIds})
-    setScanModal(true)
-  }
-  const removeDups=()=>{
-    if(!scanResult)return
-    const keepIds=new Set(scanResult.dupIds)
-    onSaveEntries(entries.filter(e=>!keepIds.has(e.id)))
-    setScanModal(false);setScanResult(null)
-    alert(`✓ ${scanResult.dupCount} dubbele invoer(en) verwijderd.`)
-  }
-  const clearMonth=()=>{
-    if(!window.confirm(`Alle uren voor ${MNL[mo]} ${yr} wissen? Dit kan niet ongedaan worden.`))return
-    onSaveEntries(entries.filter(e=>!e.date||!e.date.startsWith(ms)))
-    setScanModal(false);setScanResult(null)
-    alert(`✓ Alle uren voor ${MNL[mo]} ${yr} gewist. Herbevestig via Overzicht lessen.`)
-  }
 
   const exportXL=()=>{const mn=MNL[mo],d=[];d.push([`Uitbetalingen ${mn} ${yr}`],[]);const hdr=['Naam','Statuut','IBAN',...LT.flatMap(t=>[LL[t]+' u',LL[t]+' €']),'TOTAAL €','Betaald'];['zelfstandige','vrijwilliger'].forEach(st=>{d.push([st==='zelfstandige'?'ZELFSTANDIGEN':'VRIJWILLIGERS']);d.push(hdr);const rs=rows(st);if(!rs.length){d.push(['(geen)']);d.push([]);return}const th={},ta={};LT.forEach(t=>{th[t]=0;ta[t]=0});rs.forEach(({i,s,tot})=>{const row=[i.name,i.status,i.iban||''];LT.forEach(t=>{row.push(s[t].h||0);row.push(+(s[t].a||0).toFixed(2));th[t]+=s[t].h||0;ta[t]+=s[t].a||0});row.push(+tot.toFixed(2));row.push(isPaid(i.id)?'Betaald':'Niet betaald');d.push(row)});const tr=['TOTAAL','',''];LT.forEach(t=>{tr.push(th[t]);tr.push(+ta[t].toFixed(2))});tr.push(+LT.reduce((s,t)=>s+ta[t],0).toFixed(2));d.push(tr);d.push([])});const ws=XLSX.utils.aoa_to_sheet(d);ws['!cols']=[{wch:26},{wch:14},{wch:22},...LT.flatMap(()=>[{wch:8},{wch:11}]),{wch:12},{wch:12}];const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,`${mn} ${yr}`);XLSX.writeFile(wb,`Uitbetalingen_${mn}_${yr}.xlsx`)}
   const Sec=({st})=>{const rs=rows(st);const gt=rs.reduce((s,r)=>s+r.tot,0);if(!rs.length)return null;return(<div style={{marginBottom:24}}>
@@ -693,82 +669,12 @@ function Maand({inst,entries,paid,onSavePaid,onSaveEntries}){
         <select value={mo} onChange={e=>setMo(+e.target.value)} style={{...S.inp,padding:'6px 10px'}}>{MNL.map((m,i)=><option key={i} value={i}>{m}</option>)}</select>
         <select value={yr} onChange={e=>setYr(+e.target.value)} style={{...S.inp,width:82,padding:'6px 10px'}}>{[2025,2026,2027].map(y=><option key={y}>{y}</option>)}</select>
         <button onClick={exportXL} style={{...S.btnP,background:'#0d9488'}}>↓ Excel</button>
-          <button onClick={scanEntries} style={{...S.btnP,background:'#7c3aed',display:'flex',alignItems:'center',gap:6}}><span>🔄</span> Herberekening</button>
+          <button onClick={handleHerbereken} style={{...S.btnP,background:'#7c3aed',display:'flex',alignItems:'center',gap:6,minWidth:140}}>{herberekend?'✓ Bijgewerkt!':'🔄 Herbereken'}</button>
       </div>
     </div>
     {me.length===0?<div style={{...S.card,textAlign:'center',padding:'44px 0',color:'#94a3b8'}}><div style={{fontSize:30,marginBottom:8}}>📋</div><p style={{color:'#64748b',fontWeight:600,margin:'0 0 4px'}}>Geen uren voor {MNL[mo]} {yr}</p></div>
     :<div style={S.card}><Sec st="zelfstandige"/><Sec st="vrijwilliger"/></div>}
 
-      {/* Herberekening modal */}
-      {scanModal&&(
-        <div style={{position:'fixed',inset:0,background:'rgba(10,20,35,0.72)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:999,padding:20}}>
-          <div style={{background:'#fff',borderRadius:14,padding:28,width:'100%',maxWidth:620,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.25)'}}>
-            <h3 style={{fontSize:17,fontWeight:700,margin:'0 0 6px',color:'#0f172a'}}>🔄 Herberekening — {MNL[mo]} {yr}</h3>
-            <p style={{fontSize:13,color:'#64748b',margin:'0 0 18px'}}>Scan en herstel fouten veroorzaakt door eerdere deployments (dubbele entries).</p>
-
-            {/* Scan resultaten */}
-            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10,marginBottom:18}}>
-              <div style={{background:'#f8fafc',borderRadius:8,padding:'12px 14px',textAlign:'center'}}>
-                <div style={{fontSize:24,fontWeight:800,color:'#0f172a'}}>{scanResult?.total||0}</div>
-                <div style={{fontSize:11,color:'#64748b',textTransform:'uppercase',letterSpacing:'0.5px'}}>Totaal invoer</div>
-              </div>
-              <div style={{background:scanResult?.dupCount>0?'#fee2e2':'#dcfce7',borderRadius:8,padding:'12px 14px',textAlign:'center'}}>
-                <div style={{fontSize:24,fontWeight:800,color:scanResult?.dupCount>0?'#dc2626':'#16a34a'}}>{scanResult?.dupCount||0}</div>
-                <div style={{fontSize:11,color:scanResult?.dupCount>0?'#dc2626':'#16a34a',textTransform:'uppercase',letterSpacing:'0.5px'}}>Verdachte duplicaten</div>
-              </div>
-              <div style={{background:'#f8fafc',borderRadius:8,padding:'12px 14px',textAlign:'center'}}>
-                <div style={{fontSize:24,fontWeight:800,color:'#0d9488'}}>{(scanResult?.total||0)-(scanResult?.dupCount||0)}</div>
-                <div style={{fontSize:11,color:'#64748b',textTransform:'uppercase',letterSpacing:'0.5px'}}>Na opschoning</div>
-              </div>
-            </div>
-
-            {/* Lijst duplicaten */}
-            {scanResult?.dupCount>0&&(
-              <div style={{marginBottom:18}}>
-                <div style={{fontSize:12,fontWeight:600,color:'#dc2626',marginBottom:8}}>⚠ Verdachte duplicaten (zelfde persoon + datum + locatie + lestype):</div>
-                <div style={{maxHeight:220,overflowY:'auto',borderRadius:8,border:'1px solid #fee2e2'}}>
-                  <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
-                    <thead><tr style={{background:'#fee2e2'}}>{['Persoon','Datum','Locatie','Lestype','Uren','Bedrag'].map(h=><th key={h} style={{...S.th,padding:'6px 10px',color:'#991b1b'}}>{h}</th>)}</tr></thead>
-                    <tbody>{scanResult.toRemove.map((e,i)=>{
-                      const ins=inst.find(x=>x.id===e.instId)
-                      const rate=parseFloat(ins?.rates?.[e.lt])||0
-                      return(<tr key={e.id} style={{borderBottom:'1px solid #fef2f2',background:i%2?'#fffafa':'#fff'}}>
-                        <td style={{...S.td,fontWeight:600,padding:'6px 10px'}}>{ins?.name||'?'}</td>
-                        <td style={{...S.td,padding:'6px 10px'}}>{e.date}</td>
-                        <td style={{...S.td,padding:'6px 10px'}}>{e.loc}</td>
-                        <td style={{...S.td,padding:'6px 10px'}}>{LL[e.lt]||e.lt}</td>
-                        <td style={{...S.td,padding:'6px 10px',fontWeight:600}}>{e.hours}u</td>
-                        <td style={{...S.td,padding:'6px 10px',color:'#dc2626',fontWeight:600}}>{euro(rate*e.hours)}</td>
-                      </tr>)
-                    })}</tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-
-            {scanResult?.dupCount===0&&(
-              <div style={{background:'#dcfce7',borderRadius:8,padding:'12px 16px',marginBottom:18,fontSize:13,color:'#166534',fontWeight:600}}>
-                ✓ Geen duplicaten gevonden voor {MNL[mo]} {yr}. De gegevens zijn correct.
-              </div>
-            )}
-
-            {/* Actieknoppen */}
-            <div style={{borderTop:'1px solid #e2e8f0',paddingTop:16,display:'flex',gap:10,flexWrap:'wrap',justifyContent:'space-between',alignItems:'center'}}>
-              <button onClick={clearMonth} style={{...S.btnS,background:'#fee2e2',color:'#dc2626',fontSize:12}}>
-                🗑 Volledige maand wissen en opnieuw bevestigen
-              </button>
-              <div style={{display:'flex',gap:10}}>
-                <button onClick={()=>{setScanModal(false);setScanResult(null)}} style={S.btnS}>Annuleren</button>
-                {scanResult?.dupCount>0&&(
-                  <button onClick={removeDups} style={{...S.btnP,background:'#7c3aed'}}>
-                    ✓ Verwijder {scanResult.dupCount} duplicaat/duplicaten
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
   </div>)
 }
 
