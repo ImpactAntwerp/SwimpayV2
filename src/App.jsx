@@ -17,7 +17,7 @@ function getDayDate(mon,dag){return addDays(mon,DAY_IDX[dag]||0)}
 function fmtShort(ds){return new Date(ds).toLocaleDateString('nl-BE',{day:'numeric',month:'short'})}
 function fmtDate(ds){return new Date(ds).toLocaleDateString('nl-BE',{day:'numeric',month:'long',year:'numeric'})}
 function parseDuur(s){if(!s)return 2;const m=s.match(/(\d+)u(\d+)?/);if(!m)return 2;return parseInt(m[1])+(m[2]?parseInt(m[2])/60:0)}
-function parseKey(key){const i1=key.indexOf('_'),i2=key.indexOf('_',i1+1),i3=key.indexOf('_',i2+1);return{wk:key.slice(0,i1),locId:key.slice(i1+1,i2),sessId:key.slice(i2+1,i3),name:key.slice(i3+1)}}
+function parseKey(key){const i1=key.indexOf('_'),i2=key.indexOf('_',i1+1),i3=key.indexOf('_',i2+1);const mk=key.slice(i3+1);const[name,memberRole]=mk.includes('|')?mk.split('|'):[mk,'lesgever'];return{wk:key.slice(0,i1),locId:key.slice(i1+1,i2),sessId:key.slice(i2+1,i3),mk,name,memberRole}}
 
 const Z=(id,n,k,v,c,r,ib='',em='')=>({id,name:n,status:'zelfstandige',email:em,rates:{kids:k,volwassenen:v,coordinator:c||v,redder:r||0,onthaalmedewerker:12.5,toezichter:14,hulp_coordinator_np:0,hulp_coordinator_p:10},iban:ib})
 const V=(id,n,k,v,c,r,o,ib='',em='')=>({id,name:n,status:'vrijwilliger',email:em,rates:{kids:k,volwassenen:v,coordinator:c||0,redder:r||0,onthaalmedewerker:o||0,toezichter:14,hulp_coordinator_np:0,hulp_coordinator_p:12.5},iban:ib})
@@ -176,6 +176,21 @@ const S={
   btnSm:{background:'#f1f5f9',color:'#334155',border:'none',borderRadius:6,padding:'4px 9px',fontSize:12,fontWeight:600,cursor:'pointer',fontFamily:'inherit'},
   lbl:{display:'block',fontSize:11,fontWeight:600,color:'#64748b',marginBottom:4,textTransform:'uppercase',letterSpacing:'0.6px'},
 }
+
+const AC={
+  sessie_bevestigd:{l:'Sessie bevestigd',c:'#16a34a',bg:'#dcfce7'},
+  sessie_gewijzigd:{l:'Sessie gewijzigd',c:'#d97706',bg:'#fef3c7'},
+  sessie_planning:{l:'Planning gewijzigd',c:'#475569',bg:'#f1f5f9'},
+  vervanging:{l:'Vervanging',c:'#2563eb',bg:'#dbeafe'},
+  comm_bevestigd:{l:'Communicatie ✓',c:'#7c3aed',bg:'#ede9fe'},
+  lesgever_bewerkt:{l:'Lesgever bewerkt',c:'#0d9488',bg:'#ccfbf1'},
+  lesgever_toegevoegd:{l:'Lesgever toegevoegd',c:'#0d9488',bg:'#ccfbf1'},
+  lesgever_verwijderd:{l:'Lesgever verwijderd',c:'#dc2626',bg:'#fee2e2'},
+  betaald:{l:'Betaald gemarkeerd',c:'#16a34a',bg:'#dcfce7'},
+  export:{l:'Excel export',c:'#475569',bg:'#f1f5f9'},
+  herberekening:{l:'Herberekening',c:'#7c3aed',bg:'#ede9fe'},
+}
+
 const ii={...S.inp,width:'100%',padding:'8px 10px',boxSizing:'border-box'}
 function SBadge({s}){const z=s==='zelfstandige';return <span style={{padding:'2px 7px',borderRadius:20,fontSize:11,fontWeight:600,background:z?'#fef9c3':'#dbeafe',color:z?'#854d0e':'#1e40af'}}>{z?'Zelfstandige':'Vrijwilliger'}</span>}
 function Title({t,s}){return <div style={{marginBottom:16}}><h2 style={{fontSize:20,fontWeight:700,color:'#0f172a',margin:'0 0 2px'}}>{t}</h2>{s&&<p style={{color:'#64748b',fontSize:13,margin:0}}>{s}</p>}</div>}
@@ -195,6 +210,9 @@ export default function App(){
   const [unlocked,setUnlocked]=useState([])
   const [syncing,setSyncing]=useState(false)
   const [lastSync,setLastSync]=useState(null)
+  const [log,setLog]=useState([])
+  const [username,setUsername]=useState('')
+  const [nameInput,setNameInput]=useState('')
 
   const loadAll=async()=>{
     setSyncing(true)
@@ -203,10 +221,12 @@ export default function App(){
     if(e)setEntries(e)
     if(sc){setSched(addStableIds(sc))}else{const ss=addStableIds(SCHED);setSched(ss);await dbSet('sw_sched',ss)}
     if(a)setAtt(a);if(c)setComm(c);if(n)setNotes(n);if(p)setPaid(p);if(u)setUnlocked(u)
+      const lg=await dbGet('sw_log');if(lg)setLog(lg)
     setSyncing(false);setLastSync(new Date())
   }
 
   useEffect(()=>{
+    try{const u=localStorage.getItem('sw_username');if(u)setUsername(u)}catch{}
     loadAll()
     const channel=supabase.channel('swimpay-rt').on('postgres_changes',{event:'UPDATE',schema:'public',table:'app_data'},({new:row})=>{
       const v=JSON.parse(row.value)
@@ -218,13 +238,29 @@ export default function App(){
       else if(row.id==='sw_notes')setNotes(v)
       else if(row.id==='sw_paid')setPaid(v)
       else if(row.id==='sw_unlocked')setUnlocked(v)
+    else if(row.id==='sw_log')setLog(v)
       setLastSync(new Date())
     }).subscribe()
     return()=>supabase.removeChannel(channel)
   },[])
 
   const sv=async(k,d,fn)=>{fn(d);await dbSet(k,d)}
-  const TABS=[{k:'dashboard',l:'Dashboard'},{k:'overzicht',l:'Overzicht lessen'},{k:'uren',l:'Uren invoeren'},{k:'maand',l:'Maandoverzicht'},{k:'notities',l:'Notities'},{k:'lsg',l:'Lesgevers'}]
+
+  const addLog=async(action,description)=>{
+    let user='Onbekend';try{user=localStorage.getItem('sw_username')||'Onbekend'}catch{}
+    const entry={id:uid(),timestamp:new Date().toISOString(),user,action,description}
+    const current=await dbGet('sw_log')||[]
+    const newLog=[entry,...current].slice(0,2000)
+    setLog(newLog)
+    await dbSet('sw_log',newLog)
+  }
+
+  const confirmName=()=>{
+    if(!nameInput.trim())return
+    try{localStorage.setItem('sw_username',nameInput.trim())}catch{}
+    setUsername(nameInput.trim())
+  }
+  const TABS=[{k:'dashboard',l:'Dashboard'},{k:'overzicht',l:'Overzicht lessen'},{k:'uren',l:'Uren invoeren'},{k:'maand',l:'Maandoverzicht'},{k:'notities',l:'Notities'},{k:'lsg',l:'Lesgevers'},{k:'logboek',l:'Logboek'}]
 
   return(
     <div style={{fontFamily:"system-ui,sans-serif",minHeight:'100vh',background:'#f8fafc'}}>
@@ -240,22 +276,37 @@ export default function App(){
         </div>
       </header>
       <main style={{padding:'22px 26px',maxWidth:1200,margin:'0 auto'}}>
-        {tab==='dashboard'&&<Dashboard sched={sched} att={att} inst={inst} comm={comm} onSaveComm={d=>sv('sw_comm',d,setComm)} onSaveAtt={d=>sv('sw_att',d,setAtt)}/>}
-        {tab==='overzicht'&&<Overzicht sched={sched} inst={inst} entries={entries} att={att} unlocked={unlocked} onSaveEntries={d=>sv('sw_ent',d,setEntries)} onSaveAtt={d=>sv('sw_att',d,setAtt)} onSaveSched={d=>sv('sw_sched',d,setSched)} onSaveUnlocked={d=>sv('sw_unlocked',d,setUnlocked)}/>}
+        {tab==='dashboard'&&<Dashboard sched={sched} att={att} inst={inst} comm={comm} onSaveComm={d=>sv('sw_comm',d,setComm)} onSaveAtt={d=>sv('sw_att',d,setAtt)} onLog={addLog}/>}
+        {tab==='overzicht'&&<Overzicht sched={sched} inst={inst} entries={entries} att={att} unlocked={unlocked} onSaveEntries={d=>sv('sw_ent',d,setEntries)} onSaveAtt={d=>sv('sw_att',d,setAtt)} onSaveSched={d=>sv('sw_sched',d,setSched)} onSaveUnlocked={d=>sv('sw_unlocked',d,setUnlocked)} onLog={addLog}/>}
         {tab==='uren'&&<Uren inst={inst} entries={entries} onSave={d=>sv('sw_ent',d,setEntries)}/>}
-        {tab==='maand'&&<Maand inst={inst} entries={entries} paid={paid} onSavePaid={d=>sv('sw_paid',d,setPaid)} onRefresh={loadAll}/>}
+        {tab==='maand'&&<Maand inst={inst} entries={entries} paid={paid} onSavePaid={d=>sv('sw_paid',d,setPaid)} onRefresh={loadAll} onLog={addLog}/>}
         {tab==='notities'&&<Notities sched={sched} att={att} inst={inst} notes={notes} onSaveNotes={d=>sv('sw_notes',d,setNotes)}/>}
-        {tab==='lsg'&&<Lesgevers inst={inst} onSave={d=>sv('sw_inst',d,setInst)}/>}
+        {tab==='lsg'&&<Lesgevers inst={inst} onSave={d=>sv('sw_inst',d,setInst)} onLog={addLog}/>}
+        {tab==='logboek'&&<Logboek log={log} username={username} onChangeUser={()=>{try{localStorage.removeItem('sw_username')}catch{};setUsername('');setNameInput('')}}/>}
+
+      {/* Username modal */}
+      {!username&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(10,20,35,0.82)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:1000,padding:20}}>
+          <div style={{background:'#fff',borderRadius:14,padding:32,width:'100%',maxWidth:380,boxShadow:'0 20px 60px rgba(0,0,0,0.3)',textAlign:'center'}}>
+            <div style={{fontSize:34,marginBottom:10}}>🏊</div>
+            <h2 style={{fontSize:20,fontWeight:700,color:'#0f172a',margin:'0 0 6px'}}>SwimPay</h2>
+            <p style={{fontSize:13,color:'#64748b',margin:'0 0 20px'}}>Wie ben jij? Je naam wordt gebruikt in het logboek.</p>
+            <input autoFocus value={nameInput} onChange={e=>setNameInput(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')confirmName()}} placeholder="Jouw naam..." style={{...ii,padding:'10px 14px',fontSize:14,marginBottom:12,textAlign:'center'}}/>
+            <button onClick={confirmName} disabled={!nameInput.trim()} style={{...S.btnP,width:'100%',padding:'10px',fontSize:14,opacity:nameInput.trim()?1:0.4}}>Doorgaan →</button>
+          </div>
+        </div>
+      )}
       </main>
     </div>
   )
 }
 
 // ─── DASHBOARD ───────────────────────────────────────────────────────────────
-function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt}){
+function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt,onLog}){
   const now=new Date()
   const[viewMonth,setViewMonth]=useState(now.getMonth())
   const[viewYear,setViewYear]=useState(now.getFullYear())
+  const[showDone,setShowDone]=useState(false)
   const inames=inst.map(i=>i.name).sort()
 
   const allAbsences=useMemo(()=>{
@@ -265,11 +316,12 @@ function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt}){
       Object.keys(att[wk][locId]).forEach(sessId=>{
         const sess=loc.sessions.find(s=>s.id===sessId);if(!sess)return
         const date=getDayDate(wk,sess.dag)
-        Object.keys(att[wk][locId][sessId]).forEach(name=>{
-          const a=att[wk][locId][sessId][name]
+        Object.keys(att[wk][locId][sessId]).forEach(mk=>{
+          const a=att[wk][locId][sessId][mk]
+          const[name,memberRole]=mk.includes('|')?mk.split('|'):[mk,'lesgever']
           if(a.aanwezig===false){
-            const key=`${wk}_${locId}_${sessId}_${name}`
-            r.push({key,name,locId,locName:loc.name,sessId,dag:sess.dag,type:sess.type,date,week:wk,sub:a.sub||''})
+            const key=`${wk}_${locId}_${sessId}_${mk}`
+            r.push({key,name,memberRole,mk,locId,locName:loc.name,sessId,dag:sess.dag,type:sess.type,date,week:wk,sub:a.sub||''})
           }
         })
       })
@@ -280,22 +332,27 @@ function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt}){
   const ms=`${viewYear}-${String(viewMonth+1).padStart(2,'0')}`
   const monthAbs=allAbsences.filter(a=>a.date.startsWith(ms))
   const commRows=allAbsences.filter(a=>!comm[a.key]?.done)
+  const doneRows=allAbsences.filter(a=>comm[a.key]?.done)
   const getC=key=>comm[key]||{overeenkomst:false,contactOuders:false,niveaus:false,done:false}
   const setC=(key,patch)=>onSaveComm({...comm,[key]:{...getC(key),...patch}})
-  const confirmC=key=>onSaveComm({...comm,[key]:{...getC(key),done:true}})
+  const confirmC=key=>{const a=allAbsences.find(x=>x.key===key);onLog('comm_bevestigd',`Vervanging bevestigd: ${a?.name||'?'} @ ${a?.locName||'?'} (${a?.sub?'vervanger: '+a.sub:'geen vervanger'})`);onSaveComm({...comm,[key]:{...getC(key),done:true}})}
   const updateSub=(key,sub)=>{
-    const{wk,locId,sessId,name}=parseKey(key)
+    if(sub){const a=allAbsences.find(x=>x.key===key);onLog('vervanging',`Vervanger ${sub} aangeduid voor ${a?.name||'?'} @ ${a?.locName||'?'} (${fmtShort(a?.date||'')})`)}
+    const{wk,locId,sessId,mk}=parseKey(key)
     const next=JSON.parse(JSON.stringify(att))
     if(!next[wk])next[wk]={};if(!next[wk][locId])next[wk][locId]={};if(!next[wk][locId][sessId])next[wk][locId][sessId]={}
-    next[wk][locId][sessId][name]={...(next[wk][locId][sessId][name]||{}),aanwezig:false,sub}
+    next[wk][locId][sessId][mk]={...(next[wk][locId][sessId][mk]||{}),aanwezig:false,sub}
     onSaveAtt(next)
+    // Als de vervanging al bevestigd was → reset naar open zodat ze herbekeken wordt
+    const c=getC(key)
+    if(c.done){onSaveComm({...comm,[key]:{...c,done:false}})}
   }
   const consec=useMemo(()=>{
-    const g={};monthAbs.forEach(a=>{const k=`${a.name}||${a.locId}||${a.sessId}`;if(!g[k])g[k]={name:a.name,locName:a.locName,dag:a.dag,type:a.type,weeks:[],subs:[]};g[k].weeks.push(a.week);g[k].subs.push(a.sub)})
+    const g={};monthAbs.forEach(a=>{const k=`${a.name}||${a.memberRole||'lesgever'}||${a.locId}||${a.sessId}`;if(!g[k])g[k]={name:a.name,memberRole:a.memberRole,locName:a.locName,dag:a.dag,type:a.type,weeks:[],subs:[]};g[k].weeks.push(a.week);g[k].subs.push(a.sub)})
     return Object.values(g).filter(g=>{if(g.weeks.length<2)return false;const s=[...g.weeks].sort();for(let i=1;i<s.length;i++)if(addDays(s[i-1],7)===s[i])return true;return false}).sort((a,b)=>b.weeks.length-a.weeks.length)
   },[monthAbs])
   const single=useMemo(()=>{
-    const g={};monthAbs.forEach(a=>{const k=`${a.name}||${a.locId}||${a.sessId}`;if(!g[k])g[k]={name:a.name,locName:a.locName,dag:a.dag,type:a.type,weeks:[],subs:[]};g[k].weeks.push(a.week);g[k].subs.push(a.sub)})
+    const g={};monthAbs.forEach(a=>{const k=`${a.name}||${a.memberRole||'lesgever'}||${a.locId}||${a.sessId}`;if(!g[k])g[k]={name:a.name,memberRole:a.memberRole,locName:a.locName,dag:a.dag,type:a.type,weeks:[],subs:[]};g[k].weeks.push(a.week);g[k].subs.push(a.sub)})
     return Object.values(g).filter(g=>g.weeks.length===1).sort((a,b)=>a.name.localeCompare(b.name))
   },[monthAbs])
   const commOpen=commRows.filter(a=>{const c=getC(a.key);return!c.overeenkomst||!c.contactOuders||!c.niveaus}).length
@@ -333,7 +390,7 @@ function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt}){
                 <td style={S.td}>{a.dag}</td>
                 <td style={{...S.td,fontWeight:500}}>{a.locName}</td>
                 <td style={S.td}><TypeBadge type={a.type}/></td>
-                <td style={{...S.td,fontWeight:600}}>{a.name}</td>
+                <td style={{...S.td,fontWeight:600}}>{a.name}{a.memberRole&&a.memberRole!=='lesgever'&&<span style={{marginLeft:5,fontSize:11,padding:'1px 6px',borderRadius:20,background:RC[a.memberRole]?.[0]||'#f1f5f9',color:RC[a.memberRole]?.[1]||'#475569',fontWeight:600}}>{a.memberRole}</span>}</td>
                 <td style={{...S.td,minWidth:175}}>
                   <div style={{display:'flex',alignItems:'center',gap:5}}>
                     <input list={`sl-${i}`} value={a.sub} onChange={e=>updateSub(a.key,e.target.value)} placeholder="Naam vervanger..." style={{...S.inp,width:160,padding:'4px 8px',background:a.sub?'#f0fdf4':'#fff8ed',borderColor:a.sub?'#86efac':'#fb923c',color:a.sub?'#166534':'#92400e'}}/>
@@ -355,7 +412,37 @@ function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt}){
       }
     </div>
 
-    {/* CONSECUTIVE */}
+    {/* BEVESTIGD */}
+    {doneRows.length>0&&(
+      <div style={{...S.card,padding:'14px 20px',marginBottom:16}}>
+        <button onClick={()=>setShowDone(s=>!s)} style={{background:'none',border:'none',cursor:'pointer',display:'flex',alignItems:'center',gap:8,fontFamily:'inherit',padding:0,width:'100%'}}>
+          <div style={{width:4,height:18,background:'#16a34a',borderRadius:2,flexShrink:0}}/>
+          <span style={{fontSize:14,fontWeight:700,color:'#0f172a'}}>Bevestigde vervangingen</span>
+          <span style={{fontSize:12,color:'#64748b',marginLeft:2}}>{doneRows.length} afgehandeld</span>
+          <span style={{marginLeft:'auto',fontSize:13,color:'#94a3b8'}}>{showDone?'▲ Verbergen':'▼ Tonen'}</span>
+        </button>
+        {showDone&&<div style={{marginTop:12,overflowX:'auto'}}>
+          <p style={{fontSize:12,color:'#64748b',marginBottom:10,margin:'0 0 10px'}}>Klik op "Heropenen" als een bevestigde vervanging toch nog gewijzigd moet worden.</p>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+            <thead><tr style={{background:'#f8fafc'}}>{['Datum','Dag','Locatie','Sessie','Afwezige','Vervanger',''].map(h=><th key={h} style={{...S.th,padding:'8px 12px'}}>{h}</th>)}</tr></thead>
+            <tbody>{doneRows.map((a,i)=>(
+              <tr key={a.key} style={{borderBottom:'1px solid #f8fafc',background:i%2?'#fafcff':'#fff'}}>
+                <td style={{...S.td,color:'#64748b',fontSize:12,whiteSpace:'nowrap'}}>{fmtShort(a.date)}</td>
+                <td style={S.td}>{a.dag}</td>
+                <td style={{...S.td,fontWeight:500}}>{a.locName}</td>
+                <td style={S.td}><TypeBadge type={a.type}/></td>
+                <td style={{...S.td,fontWeight:600}}>{a.name}{a.memberRole&&a.memberRole!=='lesgever'&&<span style={{marginLeft:5,fontSize:11,padding:'1px 6px',borderRadius:20,background:RC[a.memberRole]?.[0]||'#f1f5f9',color:RC[a.memberRole]?.[1]||'#475569',fontWeight:600}}>{a.memberRole}</span>}</td>
+                <td style={S.td}>{a.sub?<span style={{padding:'2px 8px',borderRadius:20,fontSize:12,fontWeight:600,background:'#dcfce7',color:'#166534'}}>{a.sub}</span>:<span style={{color:'#94a3b8',fontSize:12}}>—</span>}</td>
+                <td style={{...S.td,whiteSpace:'nowrap'}}>
+                  <button onClick={()=>onSaveComm({...comm,[a.key]:{...getC(a.key),done:false}})} style={{...S.btnSm,background:'#fef3c7',color:'#92400e',fontSize:12}}>↩ Heropenen</button>
+                </td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>}
+      </div>
+    )}
+        {/* CONSECUTIVE */}
     <div style={S.card}>
       <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6}}><div style={{width:4,height:20,background:'#d97706',borderRadius:2}}/><h3 style={{fontSize:15,fontWeight:700,margin:0}}>{`Opeenvolgende uitval — ${MNL[viewMonth]} ${viewYear}`}</h3></div>
       <p style={{fontSize:12,color:'#64748b',marginBottom:10}}>Meerdere weken op rij afwezig op dezelfde sessie.</p>
@@ -380,7 +467,7 @@ function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt}){
       <div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
         <thead><tr style={{borderBottom:'2px solid #f1f5f9'}}>{['Naam','Locatie','Dag','Sessie','Datum','Vervanger'].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
         <tbody>{single.map((g,i)=>(<tr key={i} style={{borderBottom:'1px solid #f8fafc',background:i%2?'#fafcff':'#fff'}}>
-          <td style={{...S.td,fontWeight:600}}>{g.name}</td><td style={S.td}>{g.locName}</td><td style={S.td}>{g.dag}</td><td style={S.td}><TypeBadge type={g.type}/></td>
+          <td style={{...S.td,fontWeight:600}}>{g.name}{g.memberRole&&g.memberRole!=='lesgever'&&<span style={{marginLeft:5,fontSize:11,padding:'1px 6px',borderRadius:20,background:RC[g.memberRole]?.[0]||'#f1f5f9',color:RC[g.memberRole]?.[1]||'#475569',fontWeight:600}}>{g.memberRole}</span>}</td><td style={S.td}>{g.locName}</td><td style={S.td}>{g.dag}</td><td style={S.td}><TypeBadge type={g.type}/></td>
           <td style={S.td}>{fmtShort(getDayDate(g.weeks[0],g.dag))}</td>
           <td style={S.td}>{g.subs[0]?<span style={{padding:'2px 8px',borderRadius:20,fontSize:12,fontWeight:600,background:'#dcfce7',color:'#166534'}}>{g.subs[0]}</span>:<span style={{padding:'2px 8px',borderRadius:20,fontSize:12,fontWeight:600,background:'#fee2e2',color:'#dc2626'}}>Geen</span>}</td>
         </tr>))}</tbody>
@@ -390,7 +477,7 @@ function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt}){
 }
 
 // ─── OVERZICHT LESSEN ────────────────────────────────────────────────────────
-function Overzicht({sched,inst,entries,att,unlocked,onSaveEntries,onSaveAtt,onSaveSched,onSaveUnlocked}){
+function Overzicht({sched,inst,entries,att,unlocked,onSaveEntries,onSaveAtt,onSaveSched,onSaveUnlocked,onLog}){
   const thisMonday=getMon(new Date().toISOString().split('T')[0])
   const[week,setWeek]=useState(thisMonday)
   const[loc,setLoc]=useState(sched[0]?.locId||'')
@@ -402,16 +489,18 @@ function Overzicht({sched,inst,entries,att,unlocked,onSaveEntries,onSaveAtt,onSa
   const curLoc=sched.find(l=>l.locId===loc)
   const weekEnd=addDays(week,6)
 
-  const getAtt=(sessId,name,duur)=>{
-    const b=att[week]?.[loc]?.[sessId]?.[name]
+  const getAtt=(sessId,name,role,duur)=>{
+    const mk=`${name}|${role||'lesgever'}`
+    const b=att[week]?.[loc]?.[sessId]?.[mk]
     const defH=parseDuur(duur).toString()
     if(!b)return{aanwezig:true,sub:'',hours:defH,note:''}
     return{aanwezig:b.aanwezig!==false,sub:b.sub||'',hours:b.hours!==undefined&&b.hours!==''?b.hours:defH,note:b.note||''}
   }
-  const setMA=(sessId,name,duur,patch)=>{
+  const setMA=(sessId,name,role,duur,patch)=>{
+    const mk=`${name}|${role||'lesgever'}`
     const next=JSON.parse(JSON.stringify(att))
     if(!next[week])next[week]={};if(!next[week][loc])next[week][loc]={};if(!next[week][loc][sessId])next[week][loc][sessId]={}
-    next[week][loc][sessId][name]={...getAtt(sessId,name,duur),...patch}
+    next[week][loc][sessId][mk]={...getAtt(sessId,name,role,duur),...patch}
     onSaveAtt(next)
   }
   const sessRef=sessId=>`${week}_${loc}_${sessId}`
@@ -424,14 +513,15 @@ function Overzicht({sched,inst,entries,att,unlocked,onSaveEntries,onSaveAtt,onSa
     const base=isRedo?entries.filter(e=>e._sessRef!==ref):entries
     const date=getDayDate(week,sess.dag),locName=curLoc.name,newE=[]
     sess.members.forEach(m=>{
-      const a=getAtt(sess.id,m.name,sess.duur)
+      const a=getAtt(sess.id,m.name,m.role,sess.duur)
       const lt=m.role==='lesgever'?sess.type:m.role
       if(a.aanwezig!==false&&parseFloat(a.hours||0)>0&&!isNaN(parseFloat(a.hours))){const f=inst.find(i=>i.name===m.name);if(f)newE.push({id:uid(),instId:f.id,date,loc:locName,lt,hours:parseFloat(a.hours)||0,note:'',_sessRef:ref})}
       else if(!a.aanwezig&&a.sub&&parseFloat(a.hours||0)>0&&!isNaN(parseFloat(a.hours))){const f=inst.find(i=>i.name===a.sub);if(f)newE.push({id:uid(),instId:f.id,date,loc:locName,lt,hours:parseFloat(a.hours)||0,note:`Vervanger voor ${m.name}`,_sessRef:ref})}
     })
     if(newE.length){
       onSaveEntries([...base,...newE])
-      if(isRedo)onSaveUnlocked(unlocked.filter(r=>r!==ref))
+      if(isRedo){onSaveUnlocked(unlocked.filter(r=>r!==ref));onLog('sessie_gewijzigd',`${curLoc.name} – ${sess.dag} ${LL[sess.type]||sess.type} opnieuw bevestigd (${newE.length} uren)`)}
+      else onLog('sessie_bevestigd',`${curLoc.name} – ${sess.dag} ${LL[sess.type]||sess.type} bevestigd (${newE.length} uren, week ${fmtShort(week)})`)
       alert(`✓ ${newE.length} uren bevestigd`)
     } else alert('Geen uren om te bevestigen.')
   }
@@ -443,7 +533,7 @@ function Overzicht({sched,inst,entries,att,unlocked,onSaveEntries,onSaveAtt,onSa
   const delS=id=>updLoc({sessions:curLoc.sessions.filter(s=>s.id!==id)})
   const openEdit=sess=>{setSf({...sess,members:sess.members.map(m=>({...m})),substitutes:[...sess.substitutes]});setEditId(sess.id)}
   const openNew=()=>{setSf({dag:'Maandag',type:'kids',duur:'2u',members:[],substitutes:[]});setEditId('new')}
-  const saveSess=()=>{if(editId==='new'){const newId=`${loc}_${sf.dag}_${sf.type}`.toLowerCase().replace(/[^a-z0-9]/g,'');const idx=curLoc.sessions.filter(s=>s.id.startsWith(newId)).length;updLoc({sessions:[...curLoc.sessions,{...sf,id:idx?`${newId}_${idx+1}`:newId}]})}else updLoc({sessions:curLoc.sessions.map(s=>s.id===editId?sf:s)});setEditId(null);setSf(null);setNm('');setNs('')}
+  const saveSess=()=>{onLog('sessie_planning',editId==='new'?`Nieuwe sessie toegevoegd: ${sf.dag} ${LL[sf.type]||sf.type} @ ${curLoc?.name}`:`Sessie bewerkt: ${sf.dag} ${LL[sf.type]||sf.type} @ ${curLoc?.name}`);if(editId==='new'){const newId=`${loc}_${sf.dag}_${sf.type}`.toLowerCase().replace(/[^a-z0-9]/g,'');const idx=curLoc.sessions.filter(s=>s.id.startsWith(newId)).length;updLoc({sessions:[...curLoc.sessions,{...sf,id:idx?`${newId}_${idx+1}`:newId}]})}else updLoc({sessions:curLoc.sessions.map(s=>s.id===editId?sf:s)});setEditId(null);setSf(null);setNm('');setNs('')}
   const addM=()=>{if(!nm.trim())return;setSf(f=>({...f,members:[...f.members,{name:nm.trim(),role:'lesgever'}]}));setNm('')}
   const delM=i=>setSf(f=>({...f,members:f.members.filter((_,j)=>j!==i)}))
   const setR=(i,r)=>setSf(f=>({...f,members:f.members.map((m,j)=>j===i?{...m,role:r}:m)}))
@@ -489,20 +579,34 @@ function Overzicht({sched,inst,entries,att,unlocked,onSaveEntries,onSaveAtt,onSa
           {!editMode&&sess.substitutes.length>0&&<div style={{padding:'4px 13px',background:'#fffbeb',borderBottom:'1px solid #fef3c7',fontSize:11,color:'#92400e'}}><b>Vervangers: </b>{sess.substitutes.join(', ')}</div>}
           <div style={{padding:'9px 13px'}}>
             {sess.members.map((m,i)=>{
-              const a=getAtt(sess.id,m.name,sess.duur);const present=a.aanwezig!==false
+              const a=getAtt(sess.id,m.name,m.role,sess.duur);const present=a.aanwezig!==false
               return(<div key={i} style={{marginBottom:7}}>
                 <div style={{display:'flex',alignItems:'center',gap:5,flexWrap:'wrap',marginBottom:present?0:4}}>
                   {m.role!=='lesgever'&&<span style={{fontSize:10,padding:'1px 5px',borderRadius:20,background:RC[m.role]?.[0]||'#f1f5f9',color:RC[m.role]?.[1]||'#334155',fontWeight:600}}>{m.role}</span>}
-                  <button onClick={()=>setMA(sess.id,m.name,sess.duur,{aanwezig:!present})} style={{padding:'4px 10px',borderRadius:20,border:'none',cursor:'pointer',fontWeight:600,fontSize:13,fontFamily:'inherit',background:present?'#dbeafe':'#fee2e2',color:present?'#1e3a8a':'#991b1b'}}>{m.name}</button>
+                  <button onClick={()=>{
+                    if(!present){
+                      // Afwezig → aanwezig: vraag bevestiging als er al vervangerdata is
+                      const hasSub=a.sub&&a.sub.trim()
+                      const hasNote=a.note&&a.note.trim()
+                      if(hasSub||hasNote){
+                        const msg=`Vervanging voor ${m.name} verwijderen?`+(hasSub?`\n\nVervanger: ${a.sub}`:'')+(hasNote?`\nNotitie: ${a.note}`:'')+`\n\nDeze data gaat verloren.`
+                        if(!window.confirm(msg))return
+                      }
+                      // Reset alle vervangdata
+                      setMA(sess.id,m.name,m.role,sess.duur,{aanwezig:true,sub:'',note:'',hours:parseDuur(sess.duur).toString()})
+                    } else {
+                      setMA(sess.id,m.name,m.role,sess.duur,{aanwezig:false})
+                    }
+                  }} style={{padding:'4px 10px',borderRadius:20,border:'none',cursor:'pointer',fontWeight:600,fontSize:13,fontFamily:'inherit',background:present?'#dbeafe':'#fee2e2',color:present?'#1e3a8a':'#991b1b'}}>{m.name}</button>
                   <div style={{display:'flex',alignItems:'center',gap:3}}>
-                    <input type="number" step="0.25" min="0" max="12" value={a.hours} onChange={e=>setMA(sess.id,m.name,sess.duur,{hours:e.target.value})} style={{...S.inp,width:50,textAlign:'center',padding:'3px 5px',background:present?'#fff':'#fff8ed',borderColor:present?'#e2e8f0':'#fb923c'}}/>
+                    <input type="number" step="0.25" min="0" max="12" value={a.hours} onChange={e=>setMA(sess.id,m.name,m.role,sess.duur,{hours:e.target.value})} style={{...S.inp,width:50,textAlign:'center',padding:'3px 5px',background:present?'#fff':'#fff8ed',borderColor:present?'#e2e8f0':'#fb923c'}}/>
                     <span style={{fontSize:11,color:'#94a3b8'}}>u</span>
                   </div>
-                  {!present&&<input list={`sl-${sess.id}-${i}`} placeholder="Vervanger..." value={a.sub} onChange={e=>setMA(sess.id,m.name,sess.duur,{sub:e.target.value})} style={{...S.inp,width:145,background:'#fff8ed',borderColor:a.sub?'#22c55e':'#fb923c',color:'#92400e',padding:'3px 8px'}}/>}
+                  {!present&&<input list={`sl-${sess.id}-${i}`} placeholder="Vervanger..." value={a.sub} onChange={e=>setMA(sess.id,m.name,m.role,sess.duur,{sub:e.target.value})} style={{...S.inp,width:145,background:'#fff8ed',borderColor:a.sub?'#22c55e':'#fb923c',color:'#92400e',padding:'3px 8px'}}/>}
                   <datalist id={`sl-${sess.id}-${i}`}>{sess.substitutes.map(s=><option key={s} value={s}/>)}{inames.map(n=><option key={n} value={n}/>)}</datalist>
                 </div>
                 {!present&&<div style={{marginLeft:4,marginTop:4}}>
-                  <input placeholder="Notitie voor vervanger (optioneel)..." value={a.note} onChange={e=>setMA(sess.id,m.name,sess.duur,{note:e.target.value})} style={{...S.inp,width:'100%',padding:'4px 9px',fontSize:12,background:'#f8fafc',borderColor:'#e2e8f0'}}/>
+                  <input placeholder="Notitie voor vervanger (optioneel)..." value={a.note} onChange={e=>setMA(sess.id,m.name,m.role,sess.duur,{note:e.target.value})} style={{...S.inp,width:'100%',padding:'4px 9px',fontSize:12,background:'#f8fafc',borderColor:'#e2e8f0'}}/>
                 </div>}
               </div>)
             })}
@@ -585,11 +689,12 @@ function Uren({inst,entries,onSave}){
 }
 
 // ─── MAANDOVERZICHT ───────────────────────────────────────────────────────────
-function Maand({inst,entries,paid,onSavePaid,onRefresh}){
+function Maand({inst,entries,paid,onSavePaid,onRefresh,onLog}){
   const now=new Date();const[mo,setMo]=useState(now.getMonth());const[yr,setYr]=useState(now.getFullYear());const[expanded,setExpanded]=useState({})
   const[herberekend,setHerberekend]=useState(false)
   const handleHerbereken=async()=>{
     await onRefresh()
+    onLog('herberekening',`Herberekening uitgevoerd voor ${MNL[mo]} ${yr}`)
     setHerberekend(true)
     setTimeout(()=>setHerberekend(false),2500)
   }
@@ -600,9 +705,9 @@ function Maand({inst,entries,paid,onSavePaid,onRefresh}){
   const rows=st=>inst.filter(i=>i.status===st&&sum[i.id]).sort((a,b)=>a.name.localeCompare(b.name)).map(i=>({i,s:sum[i.id],tot:Object.values(sum[i.id]).reduce((a,t)=>a+(t?.a||0),0)}))
   const pKey=(instId)=>`${yr}_${mo}_${instId}`
   const isPaid=instId=>paid[pKey(instId)]||false
-  const togPaid=instId=>{const k=pKey(instId);onSavePaid({...paid,[k]:!paid[k]})}
+  const togPaid=instId=>{const k=pKey(instId);const wasPaid=paid[k];const i=inst.find(x=>x.id===instId);onLog('betaald',`${i?.name||'?'} ${wasPaid?'niet meer':''}gemarkeerd als betaald voor ${MNL[mo]} ${yr}`);onSavePaid({...paid,[k]:!paid[k]})}
 
-  const exportXL=()=>{const mn=MNL[mo],d=[];d.push([`Uitbetalingen ${mn} ${yr}`],[]);const hdr=['Naam','Statuut','IBAN',...LT.flatMap(t=>[LL[t]+' u',LL[t]+' €']),'TOTAAL €','Betaald'];['zelfstandige','vrijwilliger'].forEach(st=>{d.push([st==='zelfstandige'?'ZELFSTANDIGEN':'VRIJWILLIGERS']);d.push(hdr);const rs=rows(st);if(!rs.length){d.push(['(geen)']);d.push([]);return}const th={},ta={};LT.forEach(t=>{th[t]=0;ta[t]=0});rs.forEach(({i,s,tot})=>{const row=[i.name,i.status,i.iban||''];LT.forEach(t=>{row.push(s[t].h||0);row.push(+(s[t].a||0).toFixed(2));th[t]+=s[t].h||0;ta[t]+=s[t].a||0});row.push(+tot.toFixed(2));row.push(isPaid(i.id)?'Betaald':'Niet betaald');d.push(row)});const tr=['TOTAAL','',''];LT.forEach(t=>{tr.push(th[t]);tr.push(+ta[t].toFixed(2))});tr.push(+LT.reduce((s,t)=>s+ta[t],0).toFixed(2));d.push(tr);d.push([])});const ws=XLSX.utils.aoa_to_sheet(d);ws['!cols']=[{wch:26},{wch:14},{wch:22},...LT.flatMap(()=>[{wch:8},{wch:11}]),{wch:12},{wch:12}];const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,`${mn} ${yr}`);XLSX.writeFile(wb,`Uitbetalingen_${mn}_${yr}.xlsx`)}
+  const exportXL=()=>{onLog('export',`Excel export voor ${MNL[mo]} ${yr}`);const mn=MNL[mo],d=[];d.push([`Uitbetalingen ${mn} ${yr}`],[]);const hdr=['Naam','Statuut','IBAN',...LT.flatMap(t=>[LL[t]+' u',LL[t]+' €']),'TOTAAL €','Betaald'];['zelfstandige','vrijwilliger'].forEach(st=>{d.push([st==='zelfstandige'?'ZELFSTANDIGEN':'VRIJWILLIGERS']);d.push(hdr);const rs=rows(st);if(!rs.length){d.push(['(geen)']);d.push([]);return}const th={},ta={};LT.forEach(t=>{th[t]=0;ta[t]=0});rs.forEach(({i,s,tot})=>{const row=[i.name,i.status,i.iban||''];LT.forEach(t=>{row.push(s[t].h||0);row.push(+(s[t].a||0).toFixed(2));th[t]+=s[t].h||0;ta[t]+=s[t].a||0});row.push(+tot.toFixed(2));row.push(isPaid(i.id)?'Betaald':'Niet betaald');d.push(row)});const tr=['TOTAAL','',''];LT.forEach(t=>{tr.push(th[t]);tr.push(+ta[t].toFixed(2))});tr.push(+LT.reduce((s,t)=>s+ta[t],0).toFixed(2));d.push(tr);d.push([])});const ws=XLSX.utils.aoa_to_sheet(d);ws['!cols']=[{wch:26},{wch:14},{wch:22},...LT.flatMap(()=>[{wch:8},{wch:11}]),{wch:12},{wch:12}];const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,`${mn} ${yr}`);XLSX.writeFile(wb,`Uitbetalingen_${mn}_${yr}.xlsx`)}
   const Sec=({st})=>{const rs=rows(st);const gt=rs.reduce((s,r)=>s+r.tot,0);if(!rs.length)return null;return(<div style={{marginBottom:24}}>
     <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}><SBadge s={st}/><span style={{fontSize:13,color:'#64748b'}}>{rs.length} personen</span><span style={{fontWeight:700,color:'#0d9488'}}>{euro(gt)}</span></div>
     <div style={{overflowX:'auto',borderRadius:10,border:'1px solid #e2e8f0'}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
@@ -682,11 +787,13 @@ function Maand({inst,entries,paid,onSavePaid,onRefresh}){
 
 // ─── NOTITIES ─────────────────────────────────────────────────────────────────
 function Notities({sched,att,inst,notes,onSaveNotes}){
+  const[subTab,setSubTab]=useState('vervanging')
   const[filterLoc,setFilterLoc]=useState('')
   const[filterInst,setFilterInst]=useState('')
   const[form,setForm]=useState({locId:'',instName:'',text:''})
   const[del,setDel]=useState(null)
 
+  // Vervangingsnotities uit att-data
   const subNotes=useMemo(()=>{
     const r=[]
     Object.keys(att).forEach(wk=>{Object.keys(att[wk]).forEach(locId=>{
@@ -694,21 +801,30 @@ function Notities({sched,att,inst,notes,onSaveNotes}){
       Object.keys(att[wk][locId]).forEach(sessId=>{
         const sess=loc.sessions.find(s=>s.id===sessId);if(!sess)return
         const date=getDayDate(wk,sess.dag)
-        Object.keys(att[wk][locId][sessId]).forEach(name=>{
-          const a=att[wk][locId][sessId][name]
-          if(a.note){r.push({id:`att_${wk}_${locId}_${sessId}_${name}`,locId,locName:loc.name,instName:name,sub:a.sub,text:a.note,date,fromSub:true})}
+        Object.keys(att[wk][locId][sessId]).forEach(mk=>{
+          const a=att[wk][locId][sessId][mk]
+          const[instName,memberRole]=mk.includes('|')?mk.split('|'):[mk,'lesgever']
+          if(a.note){
+            r.push({
+              id:`att_${wk}_${locId}_${sessId}_${mk}`,
+              locId,locName:loc.name,instName,memberRole,
+              sub:a.sub,text:a.note,date,dag:sess.dag,type:sess.type,
+              fromSub:true
+            })
+          }
         })
       })
     })})
-    return r
+    return r.sort((a,b)=>b.date.localeCompare(a.date))
   },[att,sched])
 
-  const all=[...subNotes,...notes].sort((a,b)=>b.date.localeCompare(a.date))
-  const filtered=all.filter(n=>{
+  const filterFn=n=>{
     if(filterLoc&&n.locId!==filterLoc)return false
     if(filterInst&&!n.instName.toLowerCase().includes(filterInst.toLowerCase()))return false
     return true
-  })
+  }
+  const filteredSub=subNotes.filter(filterFn)
+  const filteredMan=notes.filter(filterFn).sort((a,b)=>b.date.localeCompare(a.date))
 
   const addNote=()=>{
     if(!form.text.trim())return
@@ -718,70 +834,126 @@ function Notities({sched,att,inst,notes,onSaveNotes}){
   }
 
   return(<div>
-    <Title t="Notities" s="Notities per lesgever en locatie. Vervangingsnotities uit Overzicht lessen verschijnen hier automatisch."/>
-    <div style={S.card}>
-      <h3 style={{fontSize:14,fontWeight:600,margin:'0 0 12px',color:'#0f172a'}}>Nieuwe notitie toevoegen</h3>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
-        <div><label style={S.lbl}>Locatie</label>
-          <select value={form.locId} onChange={e=>setForm(p=>({...p,locId:e.target.value}))} style={ii}>
-            <option value="">Geen / Algemeen</option>{sched.map(l=><option key={l.locId} value={l.locId}>{l.name}</option>)}
-          </select>
-        </div>
-        <div><label style={S.lbl}>Lesgever (optioneel)</label>
-          <input list="ilist-n" value={form.instName} onChange={e=>setForm(p=>({...p,instName:e.target.value}))} placeholder="Naam lesgever..." style={ii}/>
-          <datalist id="ilist-n">{inst.map(i=><option key={i.id} value={i.name}/>)}</datalist>
-        </div>
-      </div>
-      <div style={{display:'flex',gap:10}}>
-        <textarea value={form.text} onChange={e=>setForm(p=>({...p,text:e.target.value}))} placeholder="Notitie..." rows={2} style={{...ii,flex:1,resize:'vertical',padding:'8px 10px'}}/>
-        <button onClick={addNote} style={{...S.btnP,alignSelf:'flex-end',whiteSpace:'nowrap'}}>+ Toevoegen</button>
-      </div>
+    <Title t="Notities" s="Vervangingsnotities uit Overzicht lessen en manuele notities per lesgever."/>
+
+    {/* Sub-tabs */}
+    <div style={{display:'flex',gap:0,marginBottom:16,background:'#fff',borderRadius:10,border:'1px solid #e2e8f0',overflow:'hidden',width:'fit-content'}}>
+      {[
+        {k:'vervanging',l:`Vervangingsnotities`,cnt:subNotes.length},
+        {k:'manueel',l:'Manuele notities',cnt:notes.length}
+      ].map(t=>(
+        <button key={t.k} onClick={()=>setSubTab(t.k)} style={{padding:'9px 20px',border:'none',cursor:'pointer',fontSize:13,fontWeight:600,fontFamily:'inherit',background:subTab===t.k?'#0f2133':'transparent',color:subTab===t.k?'#2dd4bf':'#64748b',display:'flex',alignItems:'center',gap:7,transition:'all 0.15s'}}>
+          {t.l}
+          <span style={{padding:'1px 7px',borderRadius:20,fontSize:11,fontWeight:700,background:subTab===t.k?'rgba(45,212,191,0.2)':'#f1f5f9',color:subTab===t.k?'#2dd4bf':'#94a3b8'}}>{t.cnt}</span>
+        </button>
+      ))}
     </div>
 
-    <div style={S.card}>
-      <div style={{display:'flex',gap:10,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
-        <span style={{fontWeight:600,fontSize:14,color:'#0f172a'}}>{filtered.length} notities</span>
-        <select value={filterLoc} onChange={e=>setFilterLoc(e.target.value)} style={{...S.inp,width:'auto',padding:'6px 10px'}}>
-          <option value="">Alle locaties</option>{sched.map(l=><option key={l.locId} value={l.locId}>{l.name}</option>)}
-        </select>
-        <input value={filterInst} onChange={e=>setFilterInst(e.target.value)} placeholder="Filter op lesgever..." style={{...S.inp,width:200}}/>
-        {(filterLoc||filterInst)&&<button onClick={()=>{setFilterLoc('');setFilterInst('')}} style={S.btnSm}>✕ Reset</button>}
-      </div>
-      {filtered.length===0?<p style={{color:'#94a3b8',fontSize:13,textAlign:'center',padding:'20px 0'}}>Geen notities gevonden.</p>:
-        <div style={{display:'flex',flexDirection:'column',gap:8}}>
-          {filtered.map((n,i)=>(
-            <div key={n.id} style={{borderRadius:10,border:'1px solid #e2e8f0',padding:'12px 16px',background:n.fromSub?'#fffbeb':'#fff',borderLeft:`3px solid ${n.fromSub?'#f59e0b':'#2dd4bf'}`}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:6}}>
-                <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-                  {n.fromSub&&<span style={{padding:'1px 7px',borderRadius:20,fontSize:11,fontWeight:600,background:'#fef3c7',color:'#92400e'}}>Vervanging</span>}
-                  <span style={{fontSize:12,fontWeight:600,color:'#0f172a'}}>{n.instName||'—'}</span>
-                  {n.locName&&<span style={{fontSize:12,color:'#64748b'}}>· {n.locName}</span>}
-                  {n.sub&&<span style={{fontSize:12,color:'#64748b'}}>· vervanger: <b>{n.sub}</b></span>}
-                  <span style={{fontSize:11,color:'#94a3b8'}}>{fmtDate(n.date)}</span>
-                </div>
-                {!n.fromSub&&<div>
-                  {del===n.id?<span style={{display:'flex',gap:4}}>
-                    <button onClick={()=>{onSaveNotes(notes.filter(x=>x.id!==n.id));setDel(null)}} style={{...S.btnSm,background:'#fee2e2',color:'#dc2626'}}>Ja</button>
-                    <button onClick={()=>setDel(null)} style={S.btnSm}>Nee</button>
-                  </span>:<button onClick={()=>setDel(n.id)} style={{background:'none',border:'none',cursor:'pointer',color:'#cbd5e1',fontSize:16,padding:'0 4px'}}>×</button>}
-                </div>}
-              </div>
-              <p style={{margin:0,fontSize:13,color:'#334155',lineHeight:1.5}}>{n.text}</p>
-            </div>
-          ))}
-        </div>
-      }
+    {/* Filter balk */}
+    <div style={{display:'flex',gap:10,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
+      <select value={filterLoc} onChange={e=>setFilterLoc(e.target.value)} style={{...S.inp,width:'auto',padding:'6px 10px'}}>
+        <option value="">Alle locaties</option>{sched.map(l=><option key={l.locId} value={l.locId}>{l.name}</option>)}
+      </select>
+      <input value={filterInst} onChange={e=>setFilterInst(e.target.value)} placeholder="Filter op lesgever..." style={{...S.inp,width:200}}/>
+      {(filterLoc||filterInst)&&<button onClick={()=>{setFilterLoc('');setFilterInst('')}} style={S.btnSm}>✕ Reset</button>}
     </div>
+
+    {/* ── Vervangingsnotities ── */}
+    {subTab==='vervanging'&&(
+      <div style={S.card}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}>
+          <div style={{width:4,height:18,background:'#f59e0b',borderRadius:2}}/>
+          <h3 style={{fontSize:14,fontWeight:700,margin:0}}>Notities uit Overzicht lessen</h3>
+          <span style={{fontSize:12,color:'#64748b'}}>{filteredSub.length} notities</span>
+        </div>
+        {filteredSub.length===0
+          ?<p style={{color:'#94a3b8',fontSize:13,textAlign:'center',padding:'20px 0'}}>
+              {subNotes.length===0?'Nog geen vervangingsnotities. Voeg een notitie toe bij een afwezigheid in Overzicht lessen.':'Geen notities voor de geselecteerde filters.'}
+            </p>
+          :<div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {filteredSub.map(n=>(
+              <div key={n.id} style={{borderRadius:10,border:'1px solid #fef3c7',padding:'12px 16px',background:'#fffbeb',borderLeft:'3px solid #f59e0b'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:6,flexWrap:'wrap',gap:6}}>
+                  <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                    <span style={{padding:'1px 7px',borderRadius:20,fontSize:11,fontWeight:600,background:'#fef3c7',color:'#92400e'}}>Vervanging</span>
+                    <span style={{fontSize:13,fontWeight:700,color:'#0f172a'}}>{n.instName}</span>
+                    {n.memberRole&&n.memberRole!=='lesgever'&&<span style={{fontSize:11,padding:'1px 6px',borderRadius:20,background:RC[n.memberRole]?.[0]||'#f1f5f9',color:RC[n.memberRole]?.[1]||'#475569',fontWeight:600}}>{n.memberRole}</span>}
+                    <span style={{fontSize:12,color:'#64748b'}}>· {n.locName}</span>
+                    <TypeBadge type={n.type}/>
+                    {n.sub&&<span style={{fontSize:12,color:'#475569'}}>→ vervanger: <b>{n.sub}</b></span>}
+                  </div>
+                  <span style={{fontSize:11,color:'#94a3b8',whiteSpace:'nowrap'}}>{fmtDate(n.date)} ({n.dag})</span>
+                </div>
+                <p style={{margin:0,fontSize:13,color:'#334155',lineHeight:1.5}}>{n.text}</p>
+              </div>
+            ))}
+          </div>
+        }
+      </div>
+    )}
+
+    {/* ── Manuele notities ── */}
+    {subTab==='manueel'&&(<>
+      <div style={S.card}>
+        <h3 style={{fontSize:14,fontWeight:600,margin:'0 0 12px',color:'#0f172a'}}>Nieuwe notitie toevoegen</h3>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
+          <div><label style={S.lbl}>Locatie</label>
+            <select value={form.locId} onChange={e=>setForm(p=>({...p,locId:e.target.value}))} style={{...ii,padding:'8px 10px'}}>
+              <option value="">Geen / Algemeen</option>{sched.map(l=><option key={l.locId} value={l.locId}>{l.name}</option>)}
+            </select>
+          </div>
+          <div><label style={S.lbl}>Lesgever (optioneel)</label>
+            <input list="ilist-n" value={form.instName} onChange={e=>setForm(p=>({...p,instName:e.target.value}))} placeholder="Naam lesgever..." style={{...ii,padding:'8px 10px'}}/>
+            <datalist id="ilist-n">{inst.map(i=><option key={i.id} value={i.name}/>)}</datalist>
+          </div>
+        </div>
+        <div style={{display:'flex',gap:10}}>
+          <textarea value={form.text} onChange={e=>setForm(p=>({...p,text:e.target.value}))} placeholder="Notitie..." rows={2} style={{...ii,flex:1,resize:'vertical',padding:'8px 10px'}}/>
+          <button onClick={addNote} style={{...S.btnP,alignSelf:'flex-end',whiteSpace:'nowrap'}}>+ Toevoegen</button>
+        </div>
+      </div>
+      <div style={S.card}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}>
+          <div style={{width:4,height:18,background:'#2dd4bf',borderRadius:2}}/>
+          <h3 style={{fontSize:14,fontWeight:700,margin:0}}>Manuele notities</h3>
+          <span style={{fontSize:12,color:'#64748b'}}>{filteredMan.length} notities</span>
+        </div>
+        {filteredMan.length===0
+          ?<p style={{color:'#94a3b8',fontSize:13,textAlign:'center',padding:'20px 0'}}>Geen manuele notities gevonden.</p>
+          :<div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {filteredMan.map((n,i)=>(
+              <div key={n.id} style={{borderRadius:10,border:'1px solid #e2e8f0',padding:'12px 16px',background:'#fff',borderLeft:'3px solid #2dd4bf'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:6}}>
+                  <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                    <span style={{fontSize:13,fontWeight:700,color:'#0f172a'}}>{n.instName||'Algemeen'}</span>
+                    {n.locName&&n.locName!=='Algemeen'&&<span style={{fontSize:12,color:'#64748b'}}>· {n.locName}</span>}
+                    <span style={{fontSize:11,color:'#94a3b8'}}>{fmtDate(n.date)}</span>
+                  </div>
+                  {del===n.id
+                    ?<span style={{display:'flex',gap:4}}>
+                        <button onClick={()=>{onSaveNotes(notes.filter(x=>x.id!==n.id));setDel(null)}} style={{...S.btnSm,background:'#fee2e2',color:'#dc2626'}}>Ja</button>
+                        <button onClick={()=>setDel(null)} style={S.btnSm}>Nee</button>
+                      </span>
+                    :<button onClick={()=>setDel(n.id)} style={{background:'none',border:'none',cursor:'pointer',color:'#cbd5e1',fontSize:16,padding:'0 4px'}}>×</button>
+                  }
+                </div>
+                <p style={{margin:0,fontSize:13,color:'#334155',lineHeight:1.5}}>{n.text}</p>
+              </div>
+            ))}
+          </div>
+        }
+      </div>
+    </>)}
   </div>)
 }
 
 // ─── LESGEVERS ────────────────────────────────────────────────────────────────
-function Lesgevers({inst,onSave}){
+function Lesgevers({inst,onSave,onLog}){
   const[modal,setModal]=useState(false);const[eid,setEid]=useState(null);const[search,setSearch]=useState('');const[fst,setFst]=useState('all');const[f,setF]=useState(null);const[del,setDel]=useState(null)
   const empty={name:'',status:'vrijwilliger',email:'',iban:'',rates:{kids:30,volwassenen:30,coordinator:0,redder:20,onthaalmedewerker:0,toezichter:14,hulp_coordinator_np:0,hulp_coordinator_p:12.5}}
   const openAdd=()=>{setF({...empty,rates:{...empty.rates}});setEid(null);setModal(true)}
   const openEdit=i=>{setF({...i,rates:{...i.rates}});setEid(i.id);setModal(true)}
-  const save=()=>{if(!f.name.trim())return;onSave(eid?inst.map(i=>i.id===eid?{...f,id:eid}:i):[...inst,{...f,id:uid()}]);setModal(false)}
+  const save=()=>{if(!f.name.trim())return;onLog(eid?'lesgever_bewerkt':'lesgever_toegevoegd',`${eid?'Lesgever bewerkt':'Lesgever toegevoegd'}: ${f.name} (${f.status})`);onSave(eid?inst.map(i=>i.id===eid?{...f,id:eid}:i):[...inst,{...f,id:uid()}]);setModal(false)}
   const list=inst.filter(i=>fst==='all'||i.status===fst).filter(i=>i.name.toLowerCase().includes(search.toLowerCase())||i.email?.toLowerCase().includes(search.toLowerCase())).sort((a,b)=>a.status!==b.status?(a.status==='zelfstandige'?-1:1):a.name.localeCompare(b.name))
 
   return(<div>
@@ -801,7 +973,7 @@ function Lesgevers({inst,onSave}){
         <td style={{...S.td,fontFamily:'monospace',fontSize:10,color:'#64748b',whiteSpace:'nowrap'}}>{i.iban||'—'}</td>
         <td style={{...S.td,fontSize:12,color:'#64748b'}}>{i.email||'—'}</td>
         <td style={{...S.td,whiteSpace:'nowrap'}}><button onClick={()=>openEdit(i)} style={{...S.btnSm,marginRight:5}}>✏</button>
-          {del===i.id?<span style={{display:'inline-flex',gap:4}}><button onClick={()=>{onSave(inst.filter(x=>x.id!==i.id));setDel(null)}} style={{...S.btnSm,background:'#fee2e2',color:'#dc2626'}}>Ja</button><button onClick={()=>setDel(null)} style={S.btnSm}>Nee</button></span>:<button onClick={()=>setDel(i.id)} style={{background:'none',border:'none',cursor:'pointer',color:'#cbd5e1',fontSize:17,padding:'0 4px'}}>×</button>}
+          {del===i.id?<span style={{display:'inline-flex',gap:4}}><button onClick={()=>{onLog('lesgever_verwijderd',`Lesgever verwijderd: ${i.name}`);onSave(inst.filter(x=>x.id!==i.id));setDel(null)}} style={{...S.btnSm,background:'#fee2e2',color:'#dc2626'}}>Ja</button><button onClick={()=>setDel(null)} style={S.btnSm}>Nee</button></span>:<button onClick={()=>setDel(i.id)} style={{background:'none',border:'none',cursor:'pointer',color:'#cbd5e1',fontSize:17,padding:'0 4px'}}>×</button>}
         </td>
       </tr>))}</tbody>
     </table></div>{list.length===0&&<p style={{textAlign:'center',padding:24,color:'#94a3b8',fontSize:13}}>Geen resultaten.</p>}</div>
@@ -822,5 +994,95 @@ function Lesgevers({inst,onSave}){
         <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}><button onClick={()=>setModal(false)} style={S.btnS}>Annuleren</button><button onClick={save} style={S.btnP}>Opslaan</button></div>
       </div>
     </div>}
+  </div>)
+}
+
+// ─── LOGBOEK ─────────────────────────────────────────────────────────────────
+function Logboek({log,username,onChangeUser}){
+  const[filterUser,setFilterUser]=useState('')
+  const[filterAction,setFilterAction]=useState('')
+  const[filterDate,setFilterDate]=useState('')
+
+  const users=[...new Set(log.map(e=>e.user))].sort()
+  const filtered=log.filter(e=>{
+    if(filterUser&&e.user!==filterUser)return false
+    if(filterAction&&e.action!==filterAction)return false
+    if(filterDate&&!e.timestamp.startsWith(filterDate))return false
+    return true
+  })
+
+  const fmt=ts=>{
+    const d=new Date(ts)
+    return d.toLocaleDateString('nl-BE',{day:'numeric',month:'short',year:'numeric'})+' '+d.toLocaleTimeString('nl-BE',{hour:'2-digit',minute:'2-digit'})
+  }
+
+  return(<div>
+    <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:16,flexWrap:'wrap',gap:10}}>
+      <div>
+        <Title t="Logboek" s="Overzicht van alle acties in de app."/>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginTop:-8}}>
+          <span style={{fontSize:13,color:'#64748b'}}>Ingelogd als:</span>
+          <span style={{fontWeight:700,color:'#0f172a',fontSize:13}}>{username}</span>
+          <button onClick={onChangeUser} style={{...S.btnSm,fontSize:11,padding:'3px 8px'}}>Wijzigen</button>
+        </div>
+      </div>
+      <div style={{fontSize:13,color:'#64748b',background:'#f8fafc',padding:'6px 12px',borderRadius:8}}>
+        {filtered.length} van {log.length} acties
+      </div>
+    </div>
+
+    {/* Filters */}
+    <div style={{display:'flex',gap:10,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
+      <select value={filterUser} onChange={e=>setFilterUser(e.target.value)} style={{...S.inp,width:'auto',padding:'6px 10px'}}>
+        <option value="">Alle gebruikers</option>{users.map(u=><option key={u}>{u}</option>)}
+      </select>
+      <select value={filterAction} onChange={e=>setFilterAction(e.target.value)} style={{...S.inp,width:'auto',padding:'6px 10px'}}>
+        <option value="">Alle acties</option>
+        {Object.entries(AC).map(([k,v])=><option key={k} value={k}>{v.l}</option>)}
+      </select>
+      <input type="date" value={filterDate} onChange={e=>setFilterDate(e.target.value)} style={{...S.inp,padding:'6px 10px'}}/>
+      {(filterUser||filterAction||filterDate)&&<button onClick={()=>{setFilterUser('');setFilterAction('');setFilterDate('')}} style={S.btnSm}>✕ Reset</button>}
+    </div>
+
+    {log.length===0
+      ?<div style={{...S.card,textAlign:'center',padding:'40px 0'}}>
+          <div style={{fontSize:28,marginBottom:8}}>📋</div>
+          <p style={{color:'#64748b',fontWeight:600,margin:0}}>Nog geen acties geregistreerd.</p>
+          <p style={{color:'#94a3b8',fontSize:13,marginTop:4}}>Acties worden automatisch bijgehouden zodra je de app gebruikt.</p>
+        </div>
+      :<div style={{...S.card,padding:0,overflow:'hidden'}}>
+        <div style={{overflowX:'auto'}}>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+            <thead>
+              <tr style={{background:'#0f2133'}}>
+                {['Tijdstip','Gebruiker','Actie','Beschrijving'].map(h=>(
+                  <th key={h} style={{...S.th,color:'rgba(255,255,255,0.65)',padding:'10px 14px'}}>{h}</th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.length===0
+                ?<tr><td colSpan={4} style={{...S.td,textAlign:'center',color:'#94a3b8',padding:'24px'}}>Geen acties voor de geselecteerde filters.</td></tr>
+                :filtered.map((e,i)=>{
+                  const cfg=AC[e.action]||{l:e.action,c:'#475569',bg:'#f1f5f9'}
+                  return(
+                    <tr key={e.id} style={{borderBottom:'1px solid #f1f5f9',background:i%2?'#fafcff':'#fff'}}>
+                      <td style={{...S.td,whiteSpace:'nowrap',color:'#64748b',fontSize:12}}>{fmt(e.timestamp)}</td>
+                      <td style={{...S.td,fontWeight:600}}>
+                        <span style={{padding:'3px 9px',borderRadius:20,fontSize:12,background:'#f1f5f9',color:'#334155',fontWeight:600}}>{e.user}</span>
+                      </td>
+                      <td style={{...S.td,whiteSpace:'nowrap'}}>
+                        <span style={{padding:'3px 9px',borderRadius:20,fontSize:12,fontWeight:600,background:cfg.bg,color:cfg.c}}>{cfg.l}</span>
+                      </td>
+                      <td style={{...S.td,color:'#334155'}}>{e.description}</td>
+                    </tr>
+                  )
+                })
+              }
+            </tbody>
+          </table>
+        </div>
+      </div>
+    }
   </div>)
 }
