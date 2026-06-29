@@ -196,16 +196,18 @@ export default function App(){
   const [syncing,setSyncing]=useState(false)
   const [lastSync,setLastSync]=useState(null)
 
+  const loadAll=async()=>{
+    setSyncing(true)
+    const[i,e,sc,a,c,n,p,u]=await Promise.all([dbGet('sw_inst'),dbGet('sw_ent'),dbGet('sw_sched'),dbGet('sw_att'),dbGet('sw_comm'),dbGet('sw_notes'),dbGet('sw_paid'),dbGet('sw_unlocked')])
+    if(i)setInst(migrateInst(i))
+    if(e)setEntries(e)
+    if(sc){setSched(addStableIds(sc))}else{const ss=addStableIds(SCHED);setSched(ss);await dbSet('sw_sched',ss)}
+    if(a)setAtt(a);if(c)setComm(c);if(n)setNotes(n);if(p)setPaid(p);if(u)setUnlocked(u)
+    setSyncing(false);setLastSync(new Date())
+  }
+
   useEffect(()=>{
-    (async()=>{
-      setSyncing(true)
-      const[i,e,sc,a,c,n,p,u]=await Promise.all([dbGet('sw_inst'),dbGet('sw_ent'),dbGet('sw_sched'),dbGet('sw_att'),dbGet('sw_comm'),dbGet('sw_notes'),dbGet('sw_paid'),dbGet('sw_unlocked')])
-      if(i)setInst(migrateInst(i))
-      if(e)setEntries(e)
-      if(sc){setSched(addStableIds(sc))}else{const ss=addStableIds(SCHED);setSched(ss);await dbSet('sw_sched',ss)}
-      if(a)setAtt(a);if(c)setComm(c);if(n)setNotes(n);if(p)setPaid(p);if(u)setUnlocked(u)
-      setSyncing(false);setLastSync(new Date())
-    })()
+    loadAll()
     const channel=supabase.channel('swimpay-rt').on('postgres_changes',{event:'UPDATE',schema:'public',table:'app_data'},({new:row})=>{
       const v=JSON.parse(row.value)
       if(row.id==='sw_inst')setInst(migrateInst(v))
