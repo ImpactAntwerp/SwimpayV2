@@ -685,11 +685,13 @@ function Maand({inst,entries,paid,onSavePaid,onRefresh}){
 
 // ─── NOTITIES ─────────────────────────────────────────────────────────────────
 function Notities({sched,att,inst,notes,onSaveNotes}){
+  const[subTab,setSubTab]=useState('vervanging')
   const[filterLoc,setFilterLoc]=useState('')
   const[filterInst,setFilterInst]=useState('')
   const[form,setForm]=useState({locId:'',instName:'',text:''})
   const[del,setDel]=useState(null)
 
+  // Vervangingsnotities uit att-data
   const subNotes=useMemo(()=>{
     const r=[]
     Object.keys(att).forEach(wk=>{Object.keys(att[wk]).forEach(locId=>{
@@ -697,21 +699,30 @@ function Notities({sched,att,inst,notes,onSaveNotes}){
       Object.keys(att[wk][locId]).forEach(sessId=>{
         const sess=loc.sessions.find(s=>s.id===sessId);if(!sess)return
         const date=getDayDate(wk,sess.dag)
-        Object.keys(att[wk][locId][sessId]).forEach(name=>{
-          const a=att[wk][locId][sessId][name]
-          if(a.note){r.push({id:`att_${wk}_${locId}_${sessId}_${name}`,locId,locName:loc.name,instName:name,sub:a.sub,text:a.note,date,fromSub:true})}
+        Object.keys(att[wk][locId][sessId]).forEach(mk=>{
+          const a=att[wk][locId][sessId][mk]
+          const[instName,memberRole]=mk.includes('|')?mk.split('|'):[mk,'lesgever']
+          if(a.note){
+            r.push({
+              id:`att_${wk}_${locId}_${sessId}_${mk}`,
+              locId,locName:loc.name,instName,memberRole,
+              sub:a.sub,text:a.note,date,dag:sess.dag,type:sess.type,
+              fromSub:true
+            })
+          }
         })
       })
     })})
-    return r
+    return r.sort((a,b)=>b.date.localeCompare(a.date))
   },[att,sched])
 
-  const all=[...subNotes,...notes].sort((a,b)=>b.date.localeCompare(a.date))
-  const filtered=all.filter(n=>{
+  const filterFn=n=>{
     if(filterLoc&&n.locId!==filterLoc)return false
     if(filterInst&&!n.instName.toLowerCase().includes(filterInst.toLowerCase()))return false
     return true
-  })
+  }
+  const filteredSub=subNotes.filter(filterFn)
+  const filteredMan=notes.filter(filterFn).sort((a,b)=>b.date.localeCompare(a.date))
 
   const addNote=()=>{
     if(!form.text.trim())return
@@ -721,60 +732,116 @@ function Notities({sched,att,inst,notes,onSaveNotes}){
   }
 
   return(<div>
-    <Title t="Notities" s="Notities per lesgever en locatie. Vervangingsnotities uit Overzicht lessen verschijnen hier automatisch."/>
-    <div style={S.card}>
-      <h3 style={{fontSize:14,fontWeight:600,margin:'0 0 12px',color:'#0f172a'}}>Nieuwe notitie toevoegen</h3>
-      <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
-        <div><label style={S.lbl}>Locatie</label>
-          <select value={form.locId} onChange={e=>setForm(p=>({...p,locId:e.target.value}))} style={ii}>
-            <option value="">Geen / Algemeen</option>{sched.map(l=><option key={l.locId} value={l.locId}>{l.name}</option>)}
-          </select>
-        </div>
-        <div><label style={S.lbl}>Lesgever (optioneel)</label>
-          <input list="ilist-n" value={form.instName} onChange={e=>setForm(p=>({...p,instName:e.target.value}))} placeholder="Naam lesgever..." style={ii}/>
-          <datalist id="ilist-n">{inst.map(i=><option key={i.id} value={i.name}/>)}</datalist>
-        </div>
-      </div>
-      <div style={{display:'flex',gap:10}}>
-        <textarea value={form.text} onChange={e=>setForm(p=>({...p,text:e.target.value}))} placeholder="Notitie..." rows={2} style={{...ii,flex:1,resize:'vertical',padding:'8px 10px'}}/>
-        <button onClick={addNote} style={{...S.btnP,alignSelf:'flex-end',whiteSpace:'nowrap'}}>+ Toevoegen</button>
-      </div>
+    <Title t="Notities" s="Vervangingsnotities uit Overzicht lessen en manuele notities per lesgever."/>
+
+    {/* Sub-tabs */}
+    <div style={{display:'flex',gap:0,marginBottom:16,background:'#fff',borderRadius:10,border:'1px solid #e2e8f0',overflow:'hidden',width:'fit-content'}}>
+      {[
+        {k:'vervanging',l:`Vervangingsnotities`,cnt:subNotes.length},
+        {k:'manueel',l:'Manuele notities',cnt:notes.length}
+      ].map(t=>(
+        <button key={t.k} onClick={()=>setSubTab(t.k)} style={{padding:'9px 20px',border:'none',cursor:'pointer',fontSize:13,fontWeight:600,fontFamily:'inherit',background:subTab===t.k?'#0f2133':'transparent',color:subTab===t.k?'#2dd4bf':'#64748b',display:'flex',alignItems:'center',gap:7,transition:'all 0.15s'}}>
+          {t.l}
+          <span style={{padding:'1px 7px',borderRadius:20,fontSize:11,fontWeight:700,background:subTab===t.k?'rgba(45,212,191,0.2)':'#f1f5f9',color:subTab===t.k?'#2dd4bf':'#94a3b8'}}>{t.cnt}</span>
+        </button>
+      ))}
     </div>
 
-    <div style={S.card}>
-      <div style={{display:'flex',gap:10,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
-        <span style={{fontWeight:600,fontSize:14,color:'#0f172a'}}>{filtered.length} notities</span>
-        <select value={filterLoc} onChange={e=>setFilterLoc(e.target.value)} style={{...S.inp,width:'auto',padding:'6px 10px'}}>
-          <option value="">Alle locaties</option>{sched.map(l=><option key={l.locId} value={l.locId}>{l.name}</option>)}
-        </select>
-        <input value={filterInst} onChange={e=>setFilterInst(e.target.value)} placeholder="Filter op lesgever..." style={{...S.inp,width:200}}/>
-        {(filterLoc||filterInst)&&<button onClick={()=>{setFilterLoc('');setFilterInst('')}} style={S.btnSm}>✕ Reset</button>}
-      </div>
-      {filtered.length===0?<p style={{color:'#94a3b8',fontSize:13,textAlign:'center',padding:'20px 0'}}>Geen notities gevonden.</p>:
-        <div style={{display:'flex',flexDirection:'column',gap:8}}>
-          {filtered.map((n,i)=>(
-            <div key={n.id} style={{borderRadius:10,border:'1px solid #e2e8f0',padding:'12px 16px',background:n.fromSub?'#fffbeb':'#fff',borderLeft:`3px solid ${n.fromSub?'#f59e0b':'#2dd4bf'}`}}>
-              <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:6}}>
-                <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
-                  {n.fromSub&&<span style={{padding:'1px 7px',borderRadius:20,fontSize:11,fontWeight:600,background:'#fef3c7',color:'#92400e'}}>Vervanging</span>}
-                  <span style={{fontSize:12,fontWeight:600,color:'#0f172a'}}>{n.instName||'—'}</span>
-                  {n.locName&&<span style={{fontSize:12,color:'#64748b'}}>· {n.locName}</span>}
-                  {n.sub&&<span style={{fontSize:12,color:'#64748b'}}>· vervanger: <b>{n.sub}</b></span>}
-                  <span style={{fontSize:11,color:'#94a3b8'}}>{fmtDate(n.date)}</span>
-                </div>
-                {!n.fromSub&&<div>
-                  {del===n.id?<span style={{display:'flex',gap:4}}>
-                    <button onClick={()=>{onSaveNotes(notes.filter(x=>x.id!==n.id));setDel(null)}} style={{...S.btnSm,background:'#fee2e2',color:'#dc2626'}}>Ja</button>
-                    <button onClick={()=>setDel(null)} style={S.btnSm}>Nee</button>
-                  </span>:<button onClick={()=>setDel(n.id)} style={{background:'none',border:'none',cursor:'pointer',color:'#cbd5e1',fontSize:16,padding:'0 4px'}}>×</button>}
-                </div>}
-              </div>
-              <p style={{margin:0,fontSize:13,color:'#334155',lineHeight:1.5}}>{n.text}</p>
-            </div>
-          ))}
-        </div>
-      }
+    {/* Filter balk */}
+    <div style={{display:'flex',gap:10,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
+      <select value={filterLoc} onChange={e=>setFilterLoc(e.target.value)} style={{...S.inp,width:'auto',padding:'6px 10px'}}>
+        <option value="">Alle locaties</option>{sched.map(l=><option key={l.locId} value={l.locId}>{l.name}</option>)}
+      </select>
+      <input value={filterInst} onChange={e=>setFilterInst(e.target.value)} placeholder="Filter op lesgever..." style={{...S.inp,width:200}}/>
+      {(filterLoc||filterInst)&&<button onClick={()=>{setFilterLoc('');setFilterInst('')}} style={S.btnSm}>✕ Reset</button>}
     </div>
+
+    {/* ── Vervangingsnotities ── */}
+    {subTab==='vervanging'&&(
+      <div style={S.card}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}>
+          <div style={{width:4,height:18,background:'#f59e0b',borderRadius:2}}/>
+          <h3 style={{fontSize:14,fontWeight:700,margin:0}}>Notities uit Overzicht lessen</h3>
+          <span style={{fontSize:12,color:'#64748b'}}>{filteredSub.length} notities</span>
+        </div>
+        {filteredSub.length===0
+          ?<p style={{color:'#94a3b8',fontSize:13,textAlign:'center',padding:'20px 0'}}>
+              {subNotes.length===0?'Nog geen vervangingsnotities. Voeg een notitie toe bij een afwezigheid in Overzicht lessen.':'Geen notities voor de geselecteerde filters.'}
+            </p>
+          :<div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {filteredSub.map(n=>(
+              <div key={n.id} style={{borderRadius:10,border:'1px solid #fef3c7',padding:'12px 16px',background:'#fffbeb',borderLeft:'3px solid #f59e0b'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:6,flexWrap:'wrap',gap:6}}>
+                  <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                    <span style={{padding:'1px 7px',borderRadius:20,fontSize:11,fontWeight:600,background:'#fef3c7',color:'#92400e'}}>Vervanging</span>
+                    <span style={{fontSize:13,fontWeight:700,color:'#0f172a'}}>{n.instName}</span>
+                    {n.memberRole&&n.memberRole!=='lesgever'&&<span style={{fontSize:11,padding:'1px 6px',borderRadius:20,background:RC[n.memberRole]?.[0]||'#f1f5f9',color:RC[n.memberRole]?.[1]||'#475569',fontWeight:600}}>{n.memberRole}</span>}
+                    <span style={{fontSize:12,color:'#64748b'}}>· {n.locName}</span>
+                    <TypeBadge type={n.type}/>
+                    {n.sub&&<span style={{fontSize:12,color:'#475569'}}>→ vervanger: <b>{n.sub}</b></span>}
+                  </div>
+                  <span style={{fontSize:11,color:'#94a3b8',whiteSpace:'nowrap'}}>{fmtDate(n.date)} ({n.dag})</span>
+                </div>
+                <p style={{margin:0,fontSize:13,color:'#334155',lineHeight:1.5}}>{n.text}</p>
+              </div>
+            ))}
+          </div>
+        }
+      </div>
+    )}
+
+    {/* ── Manuele notities ── */}
+    {subTab==='manueel'&&(<>
+      <div style={S.card}>
+        <h3 style={{fontSize:14,fontWeight:600,margin:'0 0 12px',color:'#0f172a'}}>Nieuwe notitie toevoegen</h3>
+        <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
+          <div><label style={S.lbl}>Locatie</label>
+            <select value={form.locId} onChange={e=>setForm(p=>({...p,locId:e.target.value}))} style={{...ii,padding:'8px 10px'}}>
+              <option value="">Geen / Algemeen</option>{sched.map(l=><option key={l.locId} value={l.locId}>{l.name}</option>)}
+            </select>
+          </div>
+          <div><label style={S.lbl}>Lesgever (optioneel)</label>
+            <input list="ilist-n" value={form.instName} onChange={e=>setForm(p=>({...p,instName:e.target.value}))} placeholder="Naam lesgever..." style={{...ii,padding:'8px 10px'}}/>
+            <datalist id="ilist-n">{inst.map(i=><option key={i.id} value={i.name}/>)}</datalist>
+          </div>
+        </div>
+        <div style={{display:'flex',gap:10}}>
+          <textarea value={form.text} onChange={e=>setForm(p=>({...p,text:e.target.value}))} placeholder="Notitie..." rows={2} style={{...ii,flex:1,resize:'vertical',padding:'8px 10px'}}/>
+          <button onClick={addNote} style={{...S.btnP,alignSelf:'flex-end',whiteSpace:'nowrap'}}>+ Toevoegen</button>
+        </div>
+      </div>
+      <div style={S.card}>
+        <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}>
+          <div style={{width:4,height:18,background:'#2dd4bf',borderRadius:2}}/>
+          <h3 style={{fontSize:14,fontWeight:700,margin:0}}>Manuele notities</h3>
+          <span style={{fontSize:12,color:'#64748b'}}>{filteredMan.length} notities</span>
+        </div>
+        {filteredMan.length===0
+          ?<p style={{color:'#94a3b8',fontSize:13,textAlign:'center',padding:'20px 0'}}>Geen manuele notities gevonden.</p>
+          :<div style={{display:'flex',flexDirection:'column',gap:8}}>
+            {filteredMan.map((n,i)=>(
+              <div key={n.id} style={{borderRadius:10,border:'1px solid #e2e8f0',padding:'12px 16px',background:'#fff',borderLeft:'3px solid #2dd4bf'}}>
+                <div style={{display:'flex',justifyContent:'space-between',alignItems:'flex-start',marginBottom:6}}>
+                  <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                    <span style={{fontSize:13,fontWeight:700,color:'#0f172a'}}>{n.instName||'Algemeen'}</span>
+                    {n.locName&&n.locName!=='Algemeen'&&<span style={{fontSize:12,color:'#64748b'}}>· {n.locName}</span>}
+                    <span style={{fontSize:11,color:'#94a3b8'}}>{fmtDate(n.date)}</span>
+                  </div>
+                  {del===n.id
+                    ?<span style={{display:'flex',gap:4}}>
+                        <button onClick={()=>{onSaveNotes(notes.filter(x=>x.id!==n.id));setDel(null)}} style={{...S.btnSm,background:'#fee2e2',color:'#dc2626'}}>Ja</button>
+                        <button onClick={()=>setDel(null)} style={S.btnSm}>Nee</button>
+                      </span>
+                    :<button onClick={()=>setDel(n.id)} style={{background:'none',border:'none',cursor:'pointer',color:'#cbd5e1',fontSize:16,padding:'0 4px'}}>×</button>
+                  }
+                </div>
+                <p style={{margin:0,fontSize:13,color:'#334155',lineHeight:1.5}}>{n.text}</p>
+              </div>
+            ))}
+          </div>
+        }
+      </div>
+    </>)}
   </div>)
 }
 
