@@ -306,6 +306,7 @@ function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt,onLog}){
   const now=new Date()
   const[viewMonth,setViewMonth]=useState(now.getMonth())
   const[viewYear,setViewYear]=useState(now.getFullYear())
+  const[showDone,setShowDone]=useState(false)
   const inames=inst.map(i=>i.name).sort()
 
   const allAbsences=useMemo(()=>{
@@ -331,15 +332,20 @@ function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt,onLog}){
   const ms=`${viewYear}-${String(viewMonth+1).padStart(2,'0')}`
   const monthAbs=allAbsences.filter(a=>a.date.startsWith(ms))
   const commRows=allAbsences.filter(a=>!comm[a.key]?.done)
+  const doneRows=allAbsences.filter(a=>comm[a.key]?.done)
   const getC=key=>comm[key]||{overeenkomst:false,contactOuders:false,niveaus:false,done:false}
   const setC=(key,patch)=>onSaveComm({...comm,[key]:{...getC(key),...patch}})
   const confirmC=key=>{const a=allAbsences.find(x=>x.key===key);onLog('comm_bevestigd',`Vervanging bevestigd: ${a?.name||'?'} @ ${a?.locName||'?'} (${a?.sub?'vervanger: '+a.sub:'geen vervanger'})`);onSaveComm({...comm,[key]:{...getC(key),done:true}})}
-  const updateSub=(key,sub)=>{if(sub){const a=allAbsences.find(x=>x.key===key);onLog('vervanging',`Vervanger ${sub} aangeduid voor ${a?.name||'?'} @ ${a?.locName||'?'} (${fmtShort(a?.date||'')})`)};
+  const updateSub=(key,sub)=>{
+    if(sub){const a=allAbsences.find(x=>x.key===key);onLog('vervanging',`Vervanger ${sub} aangeduid voor ${a?.name||'?'} @ ${a?.locName||'?'} (${fmtShort(a?.date||'')})`)}
     const{wk,locId,sessId,mk}=parseKey(key)
     const next=JSON.parse(JSON.stringify(att))
     if(!next[wk])next[wk]={};if(!next[wk][locId])next[wk][locId]={};if(!next[wk][locId][sessId])next[wk][locId][sessId]={}
     next[wk][locId][sessId][mk]={...(next[wk][locId][sessId][mk]||{}),aanwezig:false,sub}
     onSaveAtt(next)
+    // Als de vervanging al bevestigd was → reset naar open zodat ze herbekeken wordt
+    const c=getC(key)
+    if(c.done){onSaveComm({...comm,[key]:{...c,done:false}})}
   }
   const consec=useMemo(()=>{
     const g={};monthAbs.forEach(a=>{const k=`${a.name}||${a.memberRole||'lesgever'}||${a.locId}||${a.sessId}`;if(!g[k])g[k]={name:a.name,memberRole:a.memberRole,locName:a.locName,dag:a.dag,type:a.type,weeks:[],subs:[]};g[k].weeks.push(a.week);g[k].subs.push(a.sub)})
@@ -406,7 +412,37 @@ function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt,onLog}){
       }
     </div>
 
-    {/* CONSECUTIVE */}
+    {/* BEVESTIGD */}
+    {doneRows.length>0&&(
+      <div style={{...S.card,padding:'14px 20px',marginBottom:16}}>
+        <button onClick={()=>setShowDone(s=>!s)} style={{background:'none',border:'none',cursor:'pointer',display:'flex',alignItems:'center',gap:8,fontFamily:'inherit',padding:0,width:'100%'}}>
+          <div style={{width:4,height:18,background:'#16a34a',borderRadius:2,flexShrink:0}}/>
+          <span style={{fontSize:14,fontWeight:700,color:'#0f172a'}}>Bevestigde vervangingen</span>
+          <span style={{fontSize:12,color:'#64748b',marginLeft:2}}>{doneRows.length} afgehandeld</span>
+          <span style={{marginLeft:'auto',fontSize:13,color:'#94a3b8'}}>{showDone?'▲ Verbergen':'▼ Tonen'}</span>
+        </button>
+        {showDone&&<div style={{marginTop:12,overflowX:'auto'}}>
+          <p style={{fontSize:12,color:'#64748b',marginBottom:10,margin:'0 0 10px'}}>Klik op "Heropenen" als een bevestigde vervanging toch nog gewijzigd moet worden.</p>
+          <table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
+            <thead><tr style={{background:'#f8fafc'}}>{['Datum','Dag','Locatie','Sessie','Afwezige','Vervanger',''].map(h=><th key={h} style={{...S.th,padding:'8px 12px'}}>{h}</th>)}</tr></thead>
+            <tbody>{doneRows.map((a,i)=>(
+              <tr key={a.key} style={{borderBottom:'1px solid #f8fafc',background:i%2?'#fafcff':'#fff'}}>
+                <td style={{...S.td,color:'#64748b',fontSize:12,whiteSpace:'nowrap'}}>{fmtShort(a.date)}</td>
+                <td style={S.td}>{a.dag}</td>
+                <td style={{...S.td,fontWeight:500}}>{a.locName}</td>
+                <td style={S.td}><TypeBadge type={a.type}/></td>
+                <td style={{...S.td,fontWeight:600}}>{a.name}{a.memberRole&&a.memberRole!=='lesgever'&&<span style={{marginLeft:5,fontSize:11,padding:'1px 6px',borderRadius:20,background:RC[a.memberRole]?.[0]||'#f1f5f9',color:RC[a.memberRole]?.[1]||'#475569',fontWeight:600}}>{a.memberRole}</span>}</td>
+                <td style={S.td}>{a.sub?<span style={{padding:'2px 8px',borderRadius:20,fontSize:12,fontWeight:600,background:'#dcfce7',color:'#166534'}}>{a.sub}</span>:<span style={{color:'#94a3b8',fontSize:12}}>—</span>}</td>
+                <td style={{...S.td,whiteSpace:'nowrap'}}>
+                  <button onClick={()=>onSaveComm({...comm,[a.key]:{...getC(a.key),done:false}})} style={{...S.btnSm,background:'#fef3c7',color:'#92400e',fontSize:12}}>↩ Heropenen</button>
+                </td>
+              </tr>
+            ))}</tbody>
+          </table>
+        </div>}
+      </div>
+    )}
+        {/* CONSECUTIVE */}
     <div style={S.card}>
       <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:6}}><div style={{width:4,height:20,background:'#d97706',borderRadius:2}}/><h3 style={{fontSize:15,fontWeight:700,margin:0}}>{`Opeenvolgende uitval — ${MNL[viewMonth]} ${viewYear}`}</h3></div>
       <p style={{fontSize:12,color:'#64748b',marginBottom:10}}>Meerdere weken op rij afwezig op dezelfde sessie.</p>
