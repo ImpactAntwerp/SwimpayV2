@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react'
+import React,{ useState, useEffect, useMemo } from 'react'
 import * as XLSX from 'xlsx'
 import { dbGet, dbSet, supabase } from './supabase.js'
 
@@ -10,7 +10,7 @@ const RC={lesgever:['#dbeafe','#1e3a8a'],coordinator:['#d1fae5','#064e3b'],redde
 const DAY_IDX={Maandag:0,Dinsdag:1,Woensdag:2,Donderdag:3,Vrijdag:4,Zaterdag:5}
 
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
-function euro(n){return'€ '+parseFloat(n||0).toFixed(2).replace('.',',')}
+function euro(n){const v=parseFloat(n||0);return'€ '+(isNaN(v)?'0,00':v.toFixed(2).replace('.',','))}
 function getMon(d){const dt=new Date(d),day=dt.getDay(),diff=dt.getDate()-day+(day===0?-6:1);dt.setDate(diff);return dt.toISOString().split('T')[0]}
 function addDays(ds,n){const d=new Date(ds);d.setDate(d.getDate()+n);return d.toISOString().split('T')[0]}
 function getDayDate(mon,dag){return addDays(mon,DAY_IDX[dag]||0)}
@@ -21,6 +21,29 @@ function parseKey(key){const i1=key.indexOf('_'),i2=key.indexOf('_',i1+1),i3=key
 
 const Z=(id,n,k,v,c,r,ib='',em='')=>({id,name:n,status:'zelfstandige',email:em,rates:{kids:k,volwassenen:v,coordinator:c||v,redder:r||0,onthaalmedewerker:12.5,toezichter:14,hulp_coordinator_np:0,hulp_coordinator_p:10},iban:ib})
 const V=(id,n,k,v,c,r,o,ib='',em='')=>({id,name:n,status:'vrijwilliger',email:em,rates:{kids:k,volwassenen:v,coordinator:c||0,redder:r||0,onthaalmedewerker:o||0,toezichter:14,hulp_coordinator_np:0,hulp_coordinator_p:12.5},iban:ib})
+
+
+// Migrate inst data from Supabase (old records may miss new fields)
+function migrateInst(arr){
+  return arr.map(i=>{
+    const isZ=i.status==='zelfstandige'
+    return{
+      ...i,
+      email:i.email||'',
+      iban:i.iban||'',
+      rates:{
+        kids:i.rates?.kids||0,
+        volwassenen:i.rates?.volwassenen||0,
+        coordinator:i.rates?.coordinator||0,
+        redder:i.rates?.redder||0,
+        onthaalmedewerker:i.rates?.onthaalmedewerker||0,
+        toezichter:i.rates?.toezichter||14,
+        hulp_coordinator_np:i.rates?.hulp_coordinator_np||0,
+        hulp_coordinator_p:i.rates?.hulp_coordinator_p||(isZ?10:12.5),
+      }
+    }
+  })
+}
 
 const INST=[
   Z('z1','Jasmin Husic',29,30,37,0,'BE57750664951835','jasmin.hsc@hotmail.com'),
@@ -95,7 +118,7 @@ const INST=[
 ]
 
 const NM=(n,r='lesgever')=>({name:n,role:r})
-const mkS=(dag,type,duur,members,substitutes=[])=>({id:uid(),dag,type,duur,members,substitutes})
+const mkS=(dag,type,duur,members,substitutes=[])=>({dag,type,duur,members,substitutes})
 const SCHED=[
   {locId:'nachtegaal',name:'De Nachtegaal',stad:'Kontich',sessions:[mkS('Woensdag','kids','2u',[NM('Jens Schoofs'),NM('Wally Schoofs','redder')])]},
   {locId:'bessem',name:'Den Bessem',stad:'Mortsel',sessions:[
@@ -129,6 +152,20 @@ const SCHED=[
   ]},
 ]
 
+
+// Stabiele sessIds op basis van locId+dag+type → veranderen NOOIT tussen deployments
+function addStableIds(sched){
+  return sched.map(loc=>{
+    const counts={}
+    return{...loc,sessions:loc.sessions.map(sess=>{
+      const base=`${loc.locId}_${sess.dag}_${sess.type}`.toLowerCase().replace(/[^a-z0-9]/g,'')
+      counts[base]=(counts[base]||0)+1
+      const id=counts[base]>1?`${base}_${counts[base]}`:base
+      return{...sess,id:sess.id&&!sess.id.match(/^[a-z][a-z0-9]{4,6}$/)?sess.id:id}
+    })}
+  })
+}
+
 const S={
   inp:{padding:'7px 10px',border:'1px solid #e2e8f0',borderRadius:7,fontSize:13,fontFamily:'inherit',outline:'none',background:'#fff',color:'#0f172a'},
   td:{padding:'9px 14px',color:'#334155',verticalAlign:'middle'},
@@ -150,7 +187,7 @@ export default function App(){
   const [tab,setTab]=useState('dashboard')
   const [inst,setInst]=useState(INST)
   const [entries,setEntries]=useState([])
-  const [sched,setSched]=useState(SCHED)
+  const [sched,setSched]=useState(()=>addStableIds(SCHED))
   const [att,setAtt]=useState({})
   const [comm,setComm]=useState({})
   const [notes,setNotes]=useState([])
@@ -163,14 +200,17 @@ export default function App(){
     (async()=>{
       setSyncing(true)
       const[i,e,sc,a,c,n,p,u]=await Promise.all([dbGet('sw_inst'),dbGet('sw_ent'),dbGet('sw_sched'),dbGet('sw_att'),dbGet('sw_comm'),dbGet('sw_notes'),dbGet('sw_paid'),dbGet('sw_unlocked')])
-      if(i)setInst(i);if(e)setEntries(e);if(sc)setSched(sc);if(a)setAtt(a);if(c)setComm(c);if(n)setNotes(n);if(p)setPaid(p);if(u)setUnlocked(u)
+      if(i)setInst(migrateInst(i))
+      if(e)setEntries(e)
+      if(sc){setSched(addStableIds(sc))}else{const ss=addStableIds(SCHED);setSched(ss);await dbSet('sw_sched',ss)}
+      if(a)setAtt(a);if(c)setComm(c);if(n)setNotes(n);if(p)setPaid(p);if(u)setUnlocked(u)
       setSyncing(false);setLastSync(new Date())
     })()
     const channel=supabase.channel('swimpay-rt').on('postgres_changes',{event:'UPDATE',schema:'public',table:'app_data'},({new:row})=>{
       const v=JSON.parse(row.value)
-      if(row.id==='sw_inst')setInst(v)
+      if(row.id==='sw_inst')setInst(migrateInst(v))
       else if(row.id==='sw_ent')setEntries(v)
-      else if(row.id==='sw_sched')setSched(v)
+      else if(row.id==='sw_sched')setSched(addStableIds(v))
       else if(row.id==='sw_att')setAtt(v)
       else if(row.id==='sw_comm')setComm(v)
       else if(row.id==='sw_notes')setNotes(v)
@@ -201,7 +241,7 @@ export default function App(){
         {tab==='dashboard'&&<Dashboard sched={sched} att={att} inst={inst} comm={comm} onSaveComm={d=>sv('sw_comm',d,setComm)} onSaveAtt={d=>sv('sw_att',d,setAtt)}/>}
         {tab==='overzicht'&&<Overzicht sched={sched} inst={inst} entries={entries} att={att} unlocked={unlocked} onSaveEntries={d=>sv('sw_ent',d,setEntries)} onSaveAtt={d=>sv('sw_att',d,setAtt)} onSaveSched={d=>sv('sw_sched',d,setSched)} onSaveUnlocked={d=>sv('sw_unlocked',d,setUnlocked)}/>}
         {tab==='uren'&&<Uren inst={inst} entries={entries} onSave={d=>sv('sw_ent',d,setEntries)}/>}
-        {tab==='maand'&&<Maand inst={inst} entries={entries} paid={paid} onSavePaid={d=>sv('sw_paid',d,setPaid)}/>}
+        {tab==='maand'&&<Maand inst={inst} entries={entries} paid={paid} onSavePaid={d=>sv('sw_paid',d,setPaid)} onSaveEntries={d=>sv('sw_ent',d,setEntries)}/>}
         {tab==='notities'&&<Notities sched={sched} att={att} inst={inst} notes={notes} onSaveNotes={d=>sv('sw_notes',d,setNotes)}/>}
         {tab==='lsg'&&<Lesgevers inst={inst} onSave={d=>sv('sw_inst',d,setInst)}/>}
       </main>
@@ -321,9 +361,9 @@ function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt}){
         <div style={{display:'flex',flexDirection:'column',gap:8}}>{consec.map((g,i)=>(
           <div key={i} style={{borderRadius:10,border:'2px solid #fcd34d',background:'#fffbeb',padding:'10px 14px',display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
             <div style={{minWidth:140}}><div style={{fontWeight:700,fontSize:14}}>{g.name}</div><div style={{fontSize:12,color:'#64748b'}}>{g.locName} · {g.dag}</div></div>
-            <div style={{display:'flex',gap:5,flex:1,flexWrap:'wrap'}}>{[...g.weeks].sort().map((wk,j)=>(
-              <span key={j} style={{padding:'3px 9px',borderRadius:20,fontSize:12,fontWeight:600,background:g.subs[j]?'#dcfce7':'#fee2e2',color:g.subs[j]?'#166534':'#991b1b',border:`1px solid ${g.subs[j]?'#86efac':'#fca5a5'}`}}>
-                {fmtShort(getDayDate(wk,g.dag))} {g.subs[j]?'→ '+g.subs[j]:'⚠ open'}
+            <div style={{display:'flex',gap:5,flex:1,flexWrap:'wrap'}}>{g.weeks.map((w,j)=>({w,s:g.subs[j]})).sort((a,b)=>a.w.localeCompare(b.w)).map(({w,s},j)=>(
+              <span key={j} style={{padding:'3px 9px',borderRadius:20,fontSize:12,fontWeight:600,background:s?'#dcfce7':'#fee2e2',color:s?'#166534':'#991b1b',border:`1px solid ${s?'#86efac':'#fca5a5'}`}}>
+                {fmtShort(getDayDate(w,g.dag))} {s?'→ '+s:'⚠ open'}
               </span>
             ))}</div>
             <span style={{padding:'3px 9px',borderRadius:20,fontSize:12,fontWeight:700,background:'#fef3c7',color:'#d97706',whiteSpace:'nowrap'}}>{g.weeks.length}× afwezig</span>
@@ -355,6 +395,7 @@ function Overzicht({sched,inst,entries,att,unlocked,onSaveEntries,onSaveAtt,onSa
   const[editMode,setEditMode]=useState(false)
   const[editId,setEditId]=useState(null)
   const[sf,setSf]=useState(null)
+  const[saving,setSaving]=useState(false)
   const[nm,setNm]=useState('');const[ns,setNs]=useState('')
   const curLoc=sched.find(l=>l.locId===loc)
   const weekEnd=addDays(week,6)
@@ -383,8 +424,8 @@ function Overzicht({sched,inst,entries,att,unlocked,onSaveEntries,onSaveAtt,onSa
     sess.members.forEach(m=>{
       const a=getAtt(sess.id,m.name,sess.duur)
       const lt=m.role==='lesgever'?sess.type:m.role
-      if(a.aanwezig!==false&&parseFloat(a.hours||0)>0){const f=inst.find(i=>i.name===m.name);if(f)newE.push({id:uid(),instId:f.id,date,loc:locName,lt,hours:parseFloat(a.hours),note:'',_sessRef:ref})}
-      else if(!a.aanwezig&&a.sub&&parseFloat(a.hours||0)>0){const f=inst.find(i=>i.name===a.sub);if(f)newE.push({id:uid(),instId:f.id,date,loc:locName,lt,hours:parseFloat(a.hours),note:`Vervanger voor ${m.name}`,_sessRef:ref})}
+      if(a.aanwezig!==false&&parseFloat(a.hours||0)>0&&!isNaN(parseFloat(a.hours))){const f=inst.find(i=>i.name===m.name);if(f)newE.push({id:uid(),instId:f.id,date,loc:locName,lt,hours:parseFloat(a.hours)||0,note:'',_sessRef:ref})}
+      else if(!a.aanwezig&&a.sub&&parseFloat(a.hours||0)>0&&!isNaN(parseFloat(a.hours))){const f=inst.find(i=>i.name===a.sub);if(f)newE.push({id:uid(),instId:f.id,date,loc:locName,lt,hours:parseFloat(a.hours)||0,note:`Vervanger voor ${m.name}`,_sessRef:ref})}
     })
     if(newE.length){
       onSaveEntries([...base,...newE])
@@ -399,8 +440,8 @@ function Overzicht({sched,inst,entries,att,unlocked,onSaveEntries,onSaveAtt,onSa
   const updLoc=u=>onSaveSched(sched.map(l=>l.locId===loc?{...l,...u}:l))
   const delS=id=>updLoc({sessions:curLoc.sessions.filter(s=>s.id!==id)})
   const openEdit=sess=>{setSf({...sess,members:sess.members.map(m=>({...m})),substitutes:[...sess.substitutes]});setEditId(sess.id)}
-  const openNew=()=>{setSf({id:uid(),dag:'Maandag',type:'kids',duur:'2u',members:[],substitutes:[]});setEditId('new')}
-  const saveSess=()=>{if(editId==='new')updLoc({sessions:[...curLoc.sessions,sf]});else updLoc({sessions:curLoc.sessions.map(s=>s.id===editId?sf:s)});setEditId(null);setSf(null);setNm('');setNs('')}
+  const openNew=()=>{setSf({dag:'Maandag',type:'kids',duur:'2u',members:[],substitutes:[]});setEditId('new')}
+  const saveSess=()=>{if(editId==='new'){const newId=`${loc}_${sf.dag}_${sf.type}`.toLowerCase().replace(/[^a-z0-9]/g,'');const idx=curLoc.sessions.filter(s=>s.id.startsWith(newId)).length;updLoc({sessions:[...curLoc.sessions,{...sf,id:idx?`${newId}_${idx+1}`:newId}]})}else updLoc({sessions:curLoc.sessions.map(s=>s.id===editId?sf:s)});setEditId(null);setSf(null);setNm('');setNs('')}
   const addM=()=>{if(!nm.trim())return;setSf(f=>({...f,members:[...f.members,{name:nm.trim(),role:'lesgever'}]}));setNm('')}
   const delM=i=>setSf(f=>({...f,members:f.members.filter((_,j)=>j!==i)}))
   const setR=(i,r)=>setSf(f=>({...f,members:f.members.map((m,j)=>j===i?{...m,role:r}:m)}))
@@ -463,8 +504,8 @@ function Overzicht({sched,inst,entries,att,unlocked,onSaveEntries,onSaveAtt,onSa
                 </div>}
               </div>)
             })}
-            {!editMode&&!conf&&!editing&&sess.members.length>0&&<button onClick={()=>confirmSess(sess)} style={{...S.btnP,marginTop:7,width:'100%',background:'#0d9488',fontSize:12,padding:'6px'}}>✓ Bevestigen → Maandoverzicht</button>}
-            {!editMode&&editing&&<button onClick={()=>confirmSess(sess)} style={{...S.btnP,marginTop:7,width:'100%',background:'#d97706',fontSize:12,padding:'6px'}}>✓ Opnieuw bevestigen</button>}
+            {!editMode&&!conf&&!editing&&sess.members.length>0&&<button onClick={()=>{if(saving)return;setSaving(true);setTimeout(()=>setSaving(false),3000);confirmSess(sess)}} disabled={saving} style={{...S.btnP,marginTop:7,width:'100%',background:saving?'#94a3b8':'#0d9488',fontSize:12,padding:'6px',cursor:saving?'not-allowed':'pointer'}}>{saving?'Bezig...':'✓ Bevestigen → Maandoverzicht'}</button>}
+            {!editMode&&editing&&<button onClick={()=>{if(saving)return;setSaving(true);setTimeout(()=>setSaving(false),3000);confirmSess(sess)}} disabled={saving} style={{...S.btnP,marginTop:7,width:'100%',background:saving?'#94a3b8':'#d97706',fontSize:12,padding:'6px'}}>✓ Opnieuw bevestigen</button>}
             {conf&&!editMode&&<div style={{display:'flex',gap:8,marginTop:7}}>
               <p style={{flex:1,fontSize:12,color:'#16a34a',margin:0,fontWeight:600,paddingTop:6}}>✓ Uren opgenomen</p>
               <button onClick={()=>handleWijzigen(sess.id)} style={{...S.btnSm,background:'#fef9c3',color:'#92400e',fontSize:12}}>✏ Wijzigen</button>
@@ -542,15 +583,47 @@ function Uren({inst,entries,onSave}){
 }
 
 // ─── MAANDOVERZICHT ───────────────────────────────────────────────────────────
-function Maand({inst,entries,paid,onSavePaid}){
-  const now=new Date();const[mo,setMo]=useState(now.getMonth());const[yr,setYr]=useState(now.getFullYear())
+function Maand({inst,entries,paid,onSavePaid,onSaveEntries}){
+  const now=new Date();const[mo,setMo]=useState(now.getMonth());const[yr,setYr]=useState(now.getFullYear());const[expanded,setExpanded]=useState({});const[scanModal,setScanModal]=useState(false);const[scanResult,setScanResult]=useState(null)
   const ms=`${yr}-${String(mo+1).padStart(2,'0')}`
   const me=entries.filter(e=>e.date&&e.date.startsWith(ms))
-  const sum=useMemo(()=>{const m={};me.forEach(e=>{if(!m[e.instId]){m[e.instId]={};LT.forEach(t=>{m[e.instId][t]={h:0,a:0}})}const r=(inst.find(i=>i.id===e.instId)?.rates[e.lt])||0;m[e.instId][e.lt].h+=e.hours;m[e.instId][e.lt].a+=r*e.hours});return m},[me,inst])
-  const rows=st=>inst.filter(i=>i.status===st&&sum[i.id]).sort((a,b)=>a.name.localeCompare(b.name)).map(i=>({i,s:sum[i.id],tot:LT.reduce((a,t)=>a+(sum[i.id][t]?.a||0),0)}))
+  const sum=useMemo(()=>{const m={};me.forEach(e=>{if(!m[e.instId]){m[e.instId]={};LT.forEach(t=>{m[e.instId][t]={h:0,a:0}})}const r=parseFloat(inst.find(i=>i.id===e.instId)?.rates?.[e.lt])||0;if(!m[e.instId][e.lt])m[e.instId][e.lt]={h:0,a:0};m[e.instId][e.lt].h+=e.hours;m[e.instId][e.lt].a+=r*e.hours});return m},[me,inst])
+  const rows=st=>inst.filter(i=>i.status===st&&sum[i.id]).sort((a,b)=>a.name.localeCompare(b.name)).map(i=>({i,s:sum[i.id],tot:Object.values(sum[i.id]).reduce((a,t)=>a+(t?.a||0),0)}))
   const pKey=(instId)=>`${yr}_${mo}_${instId}`
   const isPaid=instId=>paid[pKey(instId)]||false
   const togPaid=instId=>{const k=pKey(instId);onSavePaid({...paid,[k]:!paid[k]})}
+
+  // Scan voor verdachte duplicaten
+  const scanEntries=()=>{
+    const seen={};const dups=[];const dupIds=new Set()
+    me.forEach(e=>{
+      const key=`${e.instId}_${e.date}_${e.lt}_${e.loc}`
+      if(seen[key]){
+        // Beide entries zijn verdacht - hou de eerste, markeer de rest
+        if(!dupIds.has(seen[key]))dups.push({id:seen[key],ref:'eerste'})
+        dups.push({id:e.id,ref:'duplicaat'})
+        dupIds.add(e.id)
+      } else {seen[key]=e.id}
+    })
+    // Alleen de duplicaten (niet de eerste)
+    const toRemove=me.filter(e=>dupIds.has(e.id))
+    setScanResult({total:me.length,dupCount:toRemove.length,toRemove,dupIds})
+    setScanModal(true)
+  }
+  const removeDups=()=>{
+    if(!scanResult)return
+    const keepIds=new Set(scanResult.dupIds)
+    onSaveEntries(entries.filter(e=>!keepIds.has(e.id)))
+    setScanModal(false);setScanResult(null)
+    alert(`✓ ${scanResult.dupCount} dubbele invoer(en) verwijderd.`)
+  }
+  const clearMonth=()=>{
+    if(!window.confirm(`Alle uren voor ${MNL[mo]} ${yr} wissen? Dit kan niet ongedaan worden.`))return
+    onSaveEntries(entries.filter(e=>!e.date||!e.date.startsWith(ms)))
+    setScanModal(false);setScanResult(null)
+    alert(`✓ Alle uren voor ${MNL[mo]} ${yr} gewist. Herbevestig via Overzicht lessen.`)
+  }
+
   const exportXL=()=>{const mn=MNL[mo],d=[];d.push([`Uitbetalingen ${mn} ${yr}`],[]);const hdr=['Naam','Statuut','IBAN',...LT.flatMap(t=>[LL[t]+' u',LL[t]+' €']),'TOTAAL €','Betaald'];['zelfstandige','vrijwilliger'].forEach(st=>{d.push([st==='zelfstandige'?'ZELFSTANDIGEN':'VRIJWILLIGERS']);d.push(hdr);const rs=rows(st);if(!rs.length){d.push(['(geen)']);d.push([]);return}const th={},ta={};LT.forEach(t=>{th[t]=0;ta[t]=0});rs.forEach(({i,s,tot})=>{const row=[i.name,i.status,i.iban||''];LT.forEach(t=>{row.push(s[t].h||0);row.push(+(s[t].a||0).toFixed(2));th[t]+=s[t].h||0;ta[t]+=s[t].a||0});row.push(+tot.toFixed(2));row.push(isPaid(i.id)?'Betaald':'Niet betaald');d.push(row)});const tr=['TOTAAL','',''];LT.forEach(t=>{tr.push(th[t]);tr.push(+ta[t].toFixed(2))});tr.push(+LT.reduce((s,t)=>s+ta[t],0).toFixed(2));d.push(tr);d.push([])});const ws=XLSX.utils.aoa_to_sheet(d);ws['!cols']=[{wch:26},{wch:14},{wch:22},...LT.flatMap(()=>[{wch:8},{wch:11}]),{wch:12},{wch:12}];const wb=XLSX.utils.book_new();XLSX.utils.book_append_sheet(wb,ws,`${mn} ${yr}`);XLSX.writeFile(wb,`Uitbetalingen_${mn}_${yr}.xlsx`)}
   const Sec=({st})=>{const rs=rows(st);const gt=rs.reduce((s,r)=>s+r.tot,0);if(!rs.length)return null;return(<div style={{marginBottom:24}}>
     <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}><SBadge s={st}/><span style={{fontSize:13,color:'#64748b'}}>{rs.length} personen</span><span style={{fontWeight:700,color:'#0d9488'}}>{euro(gt)}</span></div>
@@ -565,17 +638,52 @@ function Maand({inst,entries,paid,onSavePaid}){
         </tr>
         <tr style={{background:'#162840'}}><td style={{padding:'2px 12px'}}/>{LT.map(t=>[<td key={t+'u'} style={{padding:'2px 6px',fontSize:9,color:'rgba(255,255,255,0.3)',borderLeft:'1px solid rgba(255,255,255,0.07)'}}>u</td>,<td key={t+'e'} style={{padding:'2px 6px',fontSize:9,color:'rgba(255,255,255,0.3)'}}>€</td>])}<td/><td/><td/></tr>
       </thead>
-      <tbody>{rs.map(({i,s,tot},idx)=>(<tr key={i.id} style={{background:idx%2?'#fafcff':'#fff',borderBottom:'1px solid #f1f5f9'}}>
-        <td style={{...S.td,fontWeight:600}}>{i.name}</td>
-        {LT.map(t=>[<td key={t+'h'} style={{...S.td,color:s[t].h?'#334155':'#e2e8f0',borderLeft:'1px solid #f1f5f9',padding:'8px 6px'}}>{s[t].h?s[t].h+'u':'—'}</td>,<td key={t+'a'} style={{...S.td,textAlign:'right',color:s[t].a?'#0d9488':'#e2e8f0',fontWeight:s[t].a?600:400,padding:'8px 6px'}}>{s[t].a?euro(s[t].a):'—'}</td>])}
-        <td style={{...S.td,textAlign:'right',fontWeight:700,background:'#f0fdf9'}}>{euro(tot)}</td>
-        <td style={{...S.td,fontFamily:'monospace',fontSize:10,color:'#64748b',whiteSpace:'nowrap'}}>{i.iban||'—'}</td>
-        <td style={{...S.td,textAlign:'center'}}>
-          <button onClick={()=>togPaid(i.id)} title={isPaid(i.id)?'Betaald — klik om ongedaan te maken':'Nog niet betaald'} style={{background:'none',border:'none',cursor:'pointer',fontSize:20,color:isPaid(i.id)?'#16a34a':'#ef4444',padding:'0 4px'}}>
-            {isPaid(i.id)?'✓':'✗'}
-          </button>
-        </td>
-      </tr>))}</tbody>
+      <tbody>{rs.map(({i,s,tot},idx)=>{
+          const myEntries=me.filter(e=>e.instId===i.id)
+          return(<React.Fragment key={i.id}>
+          <tr style={{background:idx%2?'#fafcff':'#fff',borderBottom:'1px solid #f1f5f9',cursor:'pointer'}} onClick={()=>setExpanded(prev=>({...prev,[i.id]:!prev[i.id]}))}>
+            <td style={{...S.td,fontWeight:600}}>
+              <span style={{marginRight:6,fontSize:10,color:'#94a3b8'}}>{expanded[i.id]?'▼':'▶'}</span>
+              {i.name}
+            </td>
+            {LT.map(t=>[<td key={t+'h'} style={{...S.td,color:s[t]?.h?'#334155':'#e2e8f0',borderLeft:'1px solid #f1f5f9',padding:'8px 6px'}}>{s[t]?.h?s[t].h+'u':'—'}</td>,<td key={t+'a'} style={{...S.td,textAlign:'right',color:s[t]?.a?'#0d9488':'#e2e8f0',fontWeight:s[t]?.a?600:400,padding:'8px 6px'}}>{s[t]?.a?euro(s[t].a):'—'}</td>])}
+            <td style={{...S.td,textAlign:'right',fontWeight:700,background:'#f0fdf9'}}>{euro(tot)}</td>
+            <td style={{...S.td,fontFamily:'monospace',fontSize:10,color:'#64748b',whiteSpace:'nowrap'}}>{i.iban||'—'}</td>
+            <td style={{...S.td,textAlign:'center'}}>
+              <button onClick={e=>{e.stopPropagation();togPaid(i.id)}} title={isPaid(i.id)?'Betaald':'Niet betaald'} style={{background:'none',border:'none',cursor:'pointer',fontSize:20,color:isPaid(i.id)?'#16a34a':'#ef4444',padding:'0 4px'}}>
+                {isPaid(i.id)?'✓':'✗'}
+              </button>
+            </td>
+          </tr>
+          {expanded[i.id]&&<tr style={{background:'#f8fafc'}}>
+            <td colSpan={3+LT.length*2+3} style={{padding:'0 14px 10px 32px'}}>
+              <div style={{fontSize:12,color:'#475569',marginTop:6,marginBottom:4,fontWeight:600}}>Individuele invoer ({myEntries.length} regels) — dubbele controle:</div>
+              <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                <thead><tr style={{borderBottom:'1px solid #e2e8f0'}}>{['Datum','Locatie','Lestype','Uren','Tarief','Bedrag','Notitie'].map(h=><th key={h} style={{...S.th,padding:'4px 8px',fontSize:10}}>{h}</th>)}</tr></thead>
+                <tbody>{myEntries.sort((a,b)=>a.date.localeCompare(b.date)).map((e,ei)=>{
+                  const rate=parseFloat(i.rates?.[e.lt])||0
+                  const calcAmt=rate*e.hours
+                  const storeAmt=s[e.lt]?.a
+                  return(<tr key={e.id} style={{borderBottom:'1px solid #f1f5f9',background:ei%2?'#fff':'#fafbfc'}}>
+                    <td style={{padding:'4px 8px',color:'#475569'}}>{e.date}</td>
+                    <td style={{padding:'4px 8px',color:'#475569'}}>{e.loc}</td>
+                    <td style={{padding:'4px 8px',color:'#475569'}}>{LL[e.lt]||e.lt}</td>
+                    <td style={{padding:'4px 8px',fontWeight:600}}>{e.hours}u</td>
+                    <td style={{padding:'4px 8px',color:'#64748b'}}>€{rate}/u</td>
+                    <td style={{padding:'4px 8px',fontWeight:600,color:'#0d9488'}}>{euro(calcAmt)}</td>
+                    <td style={{padding:'4px 8px',color:'#94a3b8',maxWidth:120,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{e.note||'—'}</td>
+                  </tr>)
+                })}</tbody>
+                <tfoot><tr style={{background:'#f0fdf9',borderTop:'2px solid #e2e8f0'}}>
+                  <td colSpan={5} style={{padding:'5px 8px',fontWeight:700,fontSize:12,color:'#0f172a'}}>CONTROLE TOTAAL:</td>
+                  <td style={{padding:'5px 8px',fontWeight:700,color:'#0d9488'}}>{euro(myEntries.reduce((s,e)=>{const r=parseFloat(i.rates?.[e.lt])||0;return s+r*e.hours},0))}</td>
+                  <td/>
+                </tr></tfoot>
+              </table>
+            </td>
+          </tr>}
+          </React.Fragment>)
+        })}</tbody>
     </table></div>
   </div>)}
   return(<div>
@@ -585,10 +693,82 @@ function Maand({inst,entries,paid,onSavePaid}){
         <select value={mo} onChange={e=>setMo(+e.target.value)} style={{...S.inp,padding:'6px 10px'}}>{MNL.map((m,i)=><option key={i} value={i}>{m}</option>)}</select>
         <select value={yr} onChange={e=>setYr(+e.target.value)} style={{...S.inp,width:82,padding:'6px 10px'}}>{[2025,2026,2027].map(y=><option key={y}>{y}</option>)}</select>
         <button onClick={exportXL} style={{...S.btnP,background:'#0d9488'}}>↓ Excel</button>
+          <button onClick={scanEntries} style={{...S.btnP,background:'#7c3aed',display:'flex',alignItems:'center',gap:6}}><span>🔄</span> Herberekening</button>
       </div>
     </div>
     {me.length===0?<div style={{...S.card,textAlign:'center',padding:'44px 0',color:'#94a3b8'}}><div style={{fontSize:30,marginBottom:8}}>📋</div><p style={{color:'#64748b',fontWeight:600,margin:'0 0 4px'}}>Geen uren voor {MNL[mo]} {yr}</p></div>
     :<div style={S.card}><Sec st="zelfstandige"/><Sec st="vrijwilliger"/></div>}
+
+      {/* Herberekening modal */}
+      {scanModal&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(10,20,35,0.72)',display:'flex',alignItems:'center',justifyContent:'center',zIndex:999,padding:20}}>
+          <div style={{background:'#fff',borderRadius:14,padding:28,width:'100%',maxWidth:620,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.25)'}}>
+            <h3 style={{fontSize:17,fontWeight:700,margin:'0 0 6px',color:'#0f172a'}}>🔄 Herberekening — {MNL[mo]} {yr}</h3>
+            <p style={{fontSize:13,color:'#64748b',margin:'0 0 18px'}}>Scan en herstel fouten veroorzaakt door eerdere deployments (dubbele entries).</p>
+
+            {/* Scan resultaten */}
+            <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10,marginBottom:18}}>
+              <div style={{background:'#f8fafc',borderRadius:8,padding:'12px 14px',textAlign:'center'}}>
+                <div style={{fontSize:24,fontWeight:800,color:'#0f172a'}}>{scanResult?.total||0}</div>
+                <div style={{fontSize:11,color:'#64748b',textTransform:'uppercase',letterSpacing:'0.5px'}}>Totaal invoer</div>
+              </div>
+              <div style={{background:scanResult?.dupCount>0?'#fee2e2':'#dcfce7',borderRadius:8,padding:'12px 14px',textAlign:'center'}}>
+                <div style={{fontSize:24,fontWeight:800,color:scanResult?.dupCount>0?'#dc2626':'#16a34a'}}>{scanResult?.dupCount||0}</div>
+                <div style={{fontSize:11,color:scanResult?.dupCount>0?'#dc2626':'#16a34a',textTransform:'uppercase',letterSpacing:'0.5px'}}>Verdachte duplicaten</div>
+              </div>
+              <div style={{background:'#f8fafc',borderRadius:8,padding:'12px 14px',textAlign:'center'}}>
+                <div style={{fontSize:24,fontWeight:800,color:'#0d9488'}}>{(scanResult?.total||0)-(scanResult?.dupCount||0)}</div>
+                <div style={{fontSize:11,color:'#64748b',textTransform:'uppercase',letterSpacing:'0.5px'}}>Na opschoning</div>
+              </div>
+            </div>
+
+            {/* Lijst duplicaten */}
+            {scanResult?.dupCount>0&&(
+              <div style={{marginBottom:18}}>
+                <div style={{fontSize:12,fontWeight:600,color:'#dc2626',marginBottom:8}}>⚠ Verdachte duplicaten (zelfde persoon + datum + locatie + lestype):</div>
+                <div style={{maxHeight:220,overflowY:'auto',borderRadius:8,border:'1px solid #fee2e2'}}>
+                  <table style={{width:'100%',borderCollapse:'collapse',fontSize:12}}>
+                    <thead><tr style={{background:'#fee2e2'}}>{['Persoon','Datum','Locatie','Lestype','Uren','Bedrag'].map(h=><th key={h} style={{...S.th,padding:'6px 10px',color:'#991b1b'}}>{h}</th>)}</tr></thead>
+                    <tbody>{scanResult.toRemove.map((e,i)=>{
+                      const ins=inst.find(x=>x.id===e.instId)
+                      const rate=parseFloat(ins?.rates?.[e.lt])||0
+                      return(<tr key={e.id} style={{borderBottom:'1px solid #fef2f2',background:i%2?'#fffafa':'#fff'}}>
+                        <td style={{...S.td,fontWeight:600,padding:'6px 10px'}}>{ins?.name||'?'}</td>
+                        <td style={{...S.td,padding:'6px 10px'}}>{e.date}</td>
+                        <td style={{...S.td,padding:'6px 10px'}}>{e.loc}</td>
+                        <td style={{...S.td,padding:'6px 10px'}}>{LL[e.lt]||e.lt}</td>
+                        <td style={{...S.td,padding:'6px 10px',fontWeight:600}}>{e.hours}u</td>
+                        <td style={{...S.td,padding:'6px 10px',color:'#dc2626',fontWeight:600}}>{euro(rate*e.hours)}</td>
+                      </tr>)
+                    })}</tbody>
+                  </table>
+                </div>
+              </div>
+            )}
+
+            {scanResult?.dupCount===0&&(
+              <div style={{background:'#dcfce7',borderRadius:8,padding:'12px 16px',marginBottom:18,fontSize:13,color:'#166534',fontWeight:600}}>
+                ✓ Geen duplicaten gevonden voor {MNL[mo]} {yr}. De gegevens zijn correct.
+              </div>
+            )}
+
+            {/* Actieknoppen */}
+            <div style={{borderTop:'1px solid #e2e8f0',paddingTop:16,display:'flex',gap:10,flexWrap:'wrap',justifyContent:'space-between',alignItems:'center'}}>
+              <button onClick={clearMonth} style={{...S.btnS,background:'#fee2e2',color:'#dc2626',fontSize:12}}>
+                🗑 Volledige maand wissen en opnieuw bevestigen
+              </button>
+              <div style={{display:'flex',gap:10}}>
+                <button onClick={()=>{setScanModal(false);setScanResult(null)}} style={S.btnS}>Annuleren</button>
+                {scanResult?.dupCount>0&&(
+                  <button onClick={removeDups} style={{...S.btnP,background:'#7c3aed'}}>
+                    ✓ Verwijder {scanResult.dupCount} duplicaat/duplicaten
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
   </div>)
 }
 
