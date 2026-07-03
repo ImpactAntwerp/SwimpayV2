@@ -180,12 +180,24 @@ const S={
 const AC={
   sessie_bevestigd:{l:'Sessie bevestigd',c:'#16a34a',bg:'#dcfce7'},
   sessie_gewijzigd:{l:'Sessie gewijzigd',c:'#d97706',bg:'#fef3c7'},
+  sessie_verwijderd:{l:'Sessie verwijderd',c:'#dc2626',bg:'#fee2e2'},
   sessie_planning:{l:'Planning gewijzigd',c:'#475569',bg:'#f1f5f9'},
-  vervanging:{l:'Vervanging',c:'#2563eb',bg:'#dbeafe'},
+  afwezig:{l:'Afwezig gemarkeerd',c:'#dc2626',bg:'#fee2e2'},
+  aanwezig:{l:'Aanwezig gemarkeerd',c:'#16a34a',bg:'#dcfce7'},
+  vervanger_ingevuld:{l:'Vervanger ingevuld',c:'#2563eb',bg:'#dbeafe'},
+  vervanger_dashboard:{l:'Vervanger via dashboard',c:'#2563eb',bg:'#dbeafe'},
+  uren_aangepast:{l:'Uren aangepast',c:'#f59e0b',bg:'#fef3c7'},
+  notitie_vervanging:{l:'Notitie vervanging',c:'#64748b',bg:'#f1f5f9'},
+  comm_status:{l:'Comm. status gewijzigd',c:'#7c3aed',bg:'#ede9fe'},
   comm_bevestigd:{l:'Communicatie ✓',c:'#7c3aed',bg:'#ede9fe'},
+  comm_heropend:{l:'Vervanging heropend',c:'#d97706',bg:'#fef3c7'},
   lesgever_bewerkt:{l:'Lesgever bewerkt',c:'#0d9488',bg:'#ccfbf1'},
   lesgever_toegevoegd:{l:'Lesgever toegevoegd',c:'#0d9488',bg:'#ccfbf1'},
   lesgever_verwijderd:{l:'Lesgever verwijderd',c:'#dc2626',bg:'#fee2e2'},
+  uren_toegevoegd:{l:'Uren toegevoegd',c:'#0d9488',bg:'#ccfbf1'},
+  uren_verwijderd:{l:'Uren verwijderd',c:'#dc2626',bg:'#fee2e2'},
+  notitie_toegevoegd:{l:'Notitie toegevoegd',c:'#475569',bg:'#f1f5f9'},
+  notitie_verwijderd:{l:'Notitie verwijderd',c:'#dc2626',bg:'#fee2e2'},
   betaald:{l:'Betaald gemarkeerd',c:'#16a34a',bg:'#dcfce7'},
   export:{l:'Excel export',c:'#475569',bg:'#f1f5f9'},
   herberekening:{l:'Herberekening',c:'#7c3aed',bg:'#ede9fe'},
@@ -213,6 +225,7 @@ export default function App(){
   const [log,setLog]=useState([])
   const [username,setUsername]=useState('')
   const [nameInput,setNameInput]=useState('')
+  const [conf,setConf]=useState([])
 
   const loadAll=async()=>{
     setSyncing(true)
@@ -222,6 +235,7 @@ export default function App(){
     if(sc){setSched(addStableIds(sc))}else{const ss=addStableIds(SCHED);setSched(ss);await dbSet('sw_sched',ss)}
     if(a)setAtt(a);if(c)setComm(c);if(n)setNotes(n);if(p)setPaid(p);if(u)setUnlocked(u)
       const lg=await dbGet('sw_log');if(lg)setLog(lg)
+      const cf=await dbGet('sw_conf');if(cf)setConf(cf)
     setSyncing(false);setLastSync(new Date())
   }
 
@@ -239,6 +253,7 @@ export default function App(){
       else if(row.id==='sw_paid')setPaid(v)
       else if(row.id==='sw_unlocked')setUnlocked(v)
     else if(row.id==='sw_log')setLog(v)
+    else if(row.id==='sw_conf')setConf(v)
       setLastSync(new Date())
     }).subscribe()
     return()=>supabase.removeChannel(channel)
@@ -277,10 +292,10 @@ export default function App(){
       </header>
       <main style={{padding:'22px 26px',maxWidth:1200,margin:'0 auto'}}>
         {tab==='dashboard'&&<Dashboard sched={sched} att={att} inst={inst} comm={comm} onSaveComm={d=>sv('sw_comm',d,setComm)} onSaveAtt={d=>sv('sw_att',d,setAtt)} onLog={addLog}/>}
-        {tab==='overzicht'&&<Overzicht sched={sched} inst={inst} entries={entries} att={att} unlocked={unlocked} onSaveEntries={d=>sv('sw_ent',d,setEntries)} onSaveAtt={d=>sv('sw_att',d,setAtt)} onSaveSched={d=>sv('sw_sched',d,setSched)} onSaveUnlocked={d=>sv('sw_unlocked',d,setUnlocked)} onLog={addLog}/>}
-        {tab==='uren'&&<Uren inst={inst} entries={entries} onSave={d=>sv('sw_ent',d,setEntries)}/>}
+        {tab==='overzicht'&&<Overzicht sched={sched} inst={inst} entries={entries} att={att} unlocked={unlocked} conf={conf} onSaveEntries={d=>sv('sw_ent',d,setEntries)} onSaveAtt={d=>sv('sw_att',d,setAtt)} onSaveSched={d=>sv('sw_sched',d,setSched)} onSaveUnlocked={d=>sv('sw_unlocked',d,setUnlocked)} onSaveConf={d=>sv('sw_conf',d,setConf)} onLog={addLog}/>}
+        {tab==='uren'&&<Uren inst={inst} entries={entries} onSave={d=>sv('sw_ent',d,setEntries)} onLog={addLog}/>}
         {tab==='maand'&&<Maand inst={inst} entries={entries} paid={paid} onSavePaid={d=>sv('sw_paid',d,setPaid)} onRefresh={loadAll} onLog={addLog}/>}
-        {tab==='notities'&&<Notities sched={sched} att={att} inst={inst} notes={notes} onSaveNotes={d=>sv('sw_notes',d,setNotes)}/>}
+        {tab==='notities'&&<Notities sched={sched} att={att} inst={inst} notes={notes} onSaveNotes={d=>sv('sw_notes',d,setNotes)} onLog={addLog}/>}
         {tab==='lsg'&&<Lesgevers inst={inst} onSave={d=>sv('sw_inst',d,setInst)} onLog={addLog}/>}
         {tab==='logboek'&&<Logboek log={log} username={username} onChangeUser={()=>{try{localStorage.removeItem('sw_username')}catch{};setUsername('');setNameInput('')}}/>}
 
@@ -321,7 +336,7 @@ function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt,onLog}){
           const[name,memberRole]=mk.includes('|')?mk.split('|'):[mk,'lesgever']
           if(a.aanwezig===false){
             const key=`${wk}_${locId}_${sessId}_${mk}`
-            r.push({key,name,memberRole,mk,locId,locName:loc.name,sessId,dag:sess.dag,type:sess.type,date,week:wk,sub:a.sub||''})
+            r.push({key,name,memberRole,mk,locId,locName:loc.name,sessId,dag:sess.dag,type:sess.type,date,week:wk,sub:a.sub||'',note:a.note||''})
           }
         })
       })
@@ -334,10 +349,17 @@ function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt,onLog}){
   const commRows=allAbsences.filter(a=>!comm[a.key]?.done)
   const doneRows=allAbsences.filter(a=>comm[a.key]?.done)
   const getC=key=>comm[key]||{overeenkomst:false,contactOuders:false,niveaus:false,done:false}
-  const setC=(key,patch)=>onSaveComm({...comm,[key]:{...getC(key),...patch}})
+  const setC=(key,patch)=>{
+    const a=allAbsences.find(x=>x.key===key)
+    const field=Object.keys(patch)[0]
+    const val=Object.values(patch)[0]
+    const labels={overeenkomst:'Overeenkomst',contactOuders:'Contact ouders',niveaus:'Niveaus'}
+    onLog('comm_status',`${labels[field]||field} ${val?'✓ verzonden':'✗ teruggedraaid'} voor ${a?.name||'?'} @ ${a?.locName||'?'} (${fmtShort(a?.date||'')})`)
+    onSaveComm({...comm,[key]:{...getC(key),...patch}})
+  }
   const confirmC=key=>{const a=allAbsences.find(x=>x.key===key);onLog('comm_bevestigd',`Vervanging bevestigd: ${a?.name||'?'} @ ${a?.locName||'?'} (${a?.sub?'vervanger: '+a.sub:'geen vervanger'})`);onSaveComm({...comm,[key]:{...getC(key),done:true}})}
   const updateSub=(key,sub)=>{
-    if(sub){const a=allAbsences.find(x=>x.key===key);onLog('vervanging',`Vervanger ${sub} aangeduid voor ${a?.name||'?'} @ ${a?.locName||'?'} (${fmtShort(a?.date||'')})`)}
+    if(sub){const a=allAbsences.find(x=>x.key===key);onLog('vervanger_dashboard',`Vervanger '${sub}' via dashboard ingevuld voor ${a?.name||'?'} @ ${a?.locName||'?'} (${fmtShort(a?.date||'')})`)}
     const{wk,locId,sessId,mk}=parseKey(key)
     const next=JSON.parse(JSON.stringify(att))
     if(!next[wk])next[wk]={};if(!next[wk][locId])next[wk][locId]={};if(!next[wk][locId][sessId])next[wk][locId][sessId]={}
@@ -352,7 +374,7 @@ function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt,onLog}){
     return Object.values(g).filter(g=>{if(g.weeks.length<2)return false;const s=[...g.weeks].sort();for(let i=1;i<s.length;i++)if(addDays(s[i-1],7)===s[i])return true;return false}).sort((a,b)=>b.weeks.length-a.weeks.length)
   },[monthAbs])
   const single=useMemo(()=>{
-    const g={};monthAbs.forEach(a=>{const k=`${a.name}||${a.memberRole||'lesgever'}||${a.locId}||${a.sessId}`;if(!g[k])g[k]={name:a.name,memberRole:a.memberRole,locName:a.locName,dag:a.dag,type:a.type,weeks:[],subs:[]};g[k].weeks.push(a.week);g[k].subs.push(a.sub)})
+    const g={};monthAbs.forEach(a=>{const k=`${a.name}||${a.memberRole||'lesgever'}||${a.locId}||${a.sessId}`;if(!g[k])g[k]={name:a.name,memberRole:a.memberRole,locName:a.locName,dag:a.dag,type:a.type,weeks:[],subs:[],notes:[]};g[k].weeks.push(a.week);g[k].subs.push(a.sub);g[k].notes.push(a.note||'')})
     return Object.values(g).filter(g=>g.weeks.length===1).sort((a,b)=>a.name.localeCompare(b.name))
   },[monthAbs])
   const commOpen=commRows.filter(a=>{const c=getC(a.key);return!c.overeenkomst||!c.contactOuders||!c.niveaus}).length
@@ -434,7 +456,7 @@ function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt,onLog}){
                 <td style={{...S.td,fontWeight:600}}>{a.name}{a.memberRole&&a.memberRole!=='lesgever'&&<span style={{marginLeft:5,fontSize:11,padding:'1px 6px',borderRadius:20,background:RC[a.memberRole]?.[0]||'#f1f5f9',color:RC[a.memberRole]?.[1]||'#475569',fontWeight:600}}>{a.memberRole}</span>}</td>
                 <td style={S.td}>{a.sub?<span style={{padding:'2px 8px',borderRadius:20,fontSize:12,fontWeight:600,background:'#dcfce7',color:'#166534'}}>{a.sub}</span>:<span style={{color:'#94a3b8',fontSize:12}}>—</span>}</td>
                 <td style={{...S.td,whiteSpace:'nowrap'}}>
-                  <button onClick={()=>onSaveComm({...comm,[a.key]:{...getC(a.key),done:false}})} style={{...S.btnSm,background:'#fef3c7',color:'#92400e',fontSize:12}}>↩ Heropenen</button>
+                  <button onClick={()=>{onLog('comm_heropend',`Vervanging heropend voor ${a.name} @ ${a.locName} (${fmtShort(a.date)})`);onSaveComm({...comm,[a.key]:{...getC(a.key),done:false}})}} style={{...S.btnSm,background:'#fef3c7',color:'#92400e',fontSize:12}}>↩ Heropenen</button>
                 </td>
               </tr>
             ))}</tbody>
@@ -465,11 +487,12 @@ function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt,onLog}){
     {single.length>0&&<div style={S.card}>
       <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:12}}><div style={{width:4,height:20,background:'#94a3b8',borderRadius:2}}/><h3 style={{fontSize:15,fontWeight:700,margin:0}}>{`Enkelvoudige afwezigheid — ${MNL[viewMonth]} ${viewYear}`}</h3></div>
       <div style={{overflowX:'auto'}}><table style={{width:'100%',borderCollapse:'collapse',fontSize:13}}>
-        <thead><tr style={{borderBottom:'2px solid #f1f5f9'}}>{['Naam','Locatie','Dag','Sessie','Datum','Vervanger'].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
+        <thead><tr style={{borderBottom:'2px solid #f1f5f9'}}>{['Naam','Locatie','Dag','Sessie','Datum','Vervanger','Notitie'].map(h=><th key={h} style={S.th}>{h}</th>)}</tr></thead>
         <tbody>{single.map((g,i)=>(<tr key={i} style={{borderBottom:'1px solid #f8fafc',background:i%2?'#fafcff':'#fff'}}>
           <td style={{...S.td,fontWeight:600}}>{g.name}{g.memberRole&&g.memberRole!=='lesgever'&&<span style={{marginLeft:5,fontSize:11,padding:'1px 6px',borderRadius:20,background:RC[g.memberRole]?.[0]||'#f1f5f9',color:RC[g.memberRole]?.[1]||'#475569',fontWeight:600}}>{g.memberRole}</span>}</td><td style={S.td}>{g.locName}</td><td style={S.td}>{g.dag}</td><td style={S.td}><TypeBadge type={g.type}/></td>
           <td style={S.td}>{fmtShort(getDayDate(g.weeks[0],g.dag))}</td>
           <td style={S.td}>{g.subs[0]?<span style={{padding:'2px 8px',borderRadius:20,fontSize:12,fontWeight:600,background:'#dcfce7',color:'#166534'}}>{g.subs[0]}</span>:<span style={{padding:'2px 8px',borderRadius:20,fontSize:12,fontWeight:600,background:'#fee2e2',color:'#dc2626'}}>Geen</span>}</td>
+          <td style={{...S.td,color:'#64748b',fontStyle:g.notes&&g.notes[0]?'normal':'italic',maxWidth:180,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}} title={g.notes&&g.notes[0]?g.notes[0]:''}>{g.notes&&g.notes[0]?g.notes[0]:'—'}</td>
         </tr>))}</tbody>
       </table></div>
     </div>}
@@ -477,7 +500,7 @@ function Dashboard({sched,att,inst,comm,onSaveComm,onSaveAtt,onLog}){
 }
 
 // ─── OVERZICHT LESSEN ────────────────────────────────────────────────────────
-function Overzicht({sched,inst,entries,att,unlocked,onSaveEntries,onSaveAtt,onSaveSched,onSaveUnlocked,onLog}){
+function Overzicht({sched,inst,entries,att,unlocked,conf,onSaveEntries,onSaveAtt,onSaveSched,onSaveUnlocked,onSaveConf,onLog}){
   const thisMonday=getMon(new Date().toISOString().split('T')[0])
   const[week,setWeek]=useState(thisMonday)
   const[loc,setLoc]=useState(sched[0]?.locId||'')
@@ -504,7 +527,7 @@ function Overzicht({sched,inst,entries,att,unlocked,onSaveEntries,onSaveAtt,onSa
     onSaveAtt(next)
   }
   const sessRef=sessId=>`${week}_${loc}_${sessId}`
-  const isConf=sessId=>entries.some(e=>e._sessRef===sessRef(sessId))
+  const isConf=sessId=>entries.some(e=>e._sessRef===sessRef(sessId))||(conf||[]).includes(sessRef(sessId))
   const isUnlocked=sessId=>unlocked.includes(sessRef(sessId))
 
   const confirmSess=(sess)=>{
@@ -523,14 +546,23 @@ function Overzicht({sched,inst,entries,att,unlocked,onSaveEntries,onSaveAtt,onSa
       if(isRedo){onSaveUnlocked(unlocked.filter(r=>r!==ref));onLog('sessie_gewijzigd',`${curLoc.name} – ${sess.dag} ${LL[sess.type]||sess.type} opnieuw bevestigd (${newE.length} uren)`)}
       else onLog('sessie_bevestigd',`${curLoc.name} – ${sess.dag} ${LL[sess.type]||sess.type} bevestigd (${newE.length} uren, week ${fmtShort(week)})`)
       alert(`✓ ${newE.length} uren bevestigd`)
-    } else alert('Geen uren om te bevestigen.')
+    } else {
+      // Sessie afgelast of iedereen op 0 uren → markeer als bevestigd zonder entries
+      const newConf=[...(conf||[]).filter(r=>r!==ref),ref]
+      onSaveConf(newConf)
+      if(isRedo)onSaveUnlocked(unlocked.filter(r=>r!==ref))
+      onLog('sessie_bevestigd',`${curLoc.name} – ${sess.dag} ${LL[sess.type]||sess.type} bevestigd (afgelast / 0 uren, week ${fmtShort(week)})`)
+      alert('✓ Sessie bevestigd als afgelast (0 uren)')
+    }
   }
   const handleWijzigen=sessId=>{
-    if(!unlocked.includes(sessRef(sessId)))onSaveUnlocked([...unlocked,sessRef(sessId)])
+    const ref=sessRef(sessId)
+    if(!unlocked.includes(ref))onSaveUnlocked([...unlocked,ref])
+    if((conf||[]).includes(ref))onSaveConf((conf||[]).filter(r=>r!==ref))
   }
 
   const updLoc=u=>onSaveSched(sched.map(l=>l.locId===loc?{...l,...u}:l))
-  const delS=id=>updLoc({sessions:curLoc.sessions.filter(s=>s.id!==id)})
+  const delS=id=>{const s=curLoc.sessions.find(x=>x.id===id);onLog('sessie_verwijderd',`Sessie verwijderd: ${s?.dag} ${LL[s?.type]||s?.type} @ ${curLoc.name}`);updLoc({sessions:curLoc.sessions.filter(s=>s.id!==id)})}
   const openEdit=sess=>{setSf({...sess,members:sess.members.map(m=>({...m})),substitutes:[...sess.substitutes]});setEditId(sess.id)}
   const openNew=()=>{setSf({dag:'Maandag',type:'kids',duur:'2u',members:[],substitutes:[]});setEditId('new')}
   const saveSess=()=>{onLog('sessie_planning',editId==='new'?`Nieuwe sessie toegevoegd: ${sf.dag} ${LL[sf.type]||sf.type} @ ${curLoc?.name}`:`Sessie bewerkt: ${sf.dag} ${LL[sf.type]||sf.type} @ ${curLoc?.name}`);if(editId==='new'){const newId=`${loc}_${sf.dag}_${sf.type}`.toLowerCase().replace(/[^a-z0-9]/g,'');const idx=curLoc.sessions.filter(s=>s.id.startsWith(newId)).length;updLoc({sessions:[...curLoc.sessions,{...sf,id:idx?`${newId}_${idx+1}`:newId}]})}else updLoc({sessions:curLoc.sessions.map(s=>s.id===editId?sf:s)});setEditId(null);setSf(null);setNm('');setNs('')}
@@ -584,37 +616,41 @@ function Overzicht({sched,inst,entries,att,unlocked,onSaveEntries,onSaveAtt,onSa
                 <div style={{display:'flex',alignItems:'center',gap:5,flexWrap:'wrap',marginBottom:present?0:4}}>
                   {m.role!=='lesgever'&&<span style={{fontSize:10,padding:'1px 5px',borderRadius:20,background:RC[m.role]?.[0]||'#f1f5f9',color:RC[m.role]?.[1]||'#334155',fontWeight:600}}>{m.role}</span>}
                   <button onClick={()=>{
+                    const sessDate=getDayDate(week,sess.dag)
+                    const sessLabel=`${m.name}${m.role!=='lesgever'?' ('+m.role+')':''} – ${sess.dag} ${LL[sess.type]||sess.type} @ ${curLoc.name} (${fmtShort(sessDate)})`
                     if(!present){
-                      // Afwezig → aanwezig: vraag bevestiging als er al vervangerdata is
                       const hasSub=a.sub&&a.sub.trim()
                       const hasNote=a.note&&a.note.trim()
                       if(hasSub||hasNote){
                         const msg=`Vervanging voor ${m.name} verwijderen?`+(hasSub?`\n\nVervanger: ${a.sub}`:'')+(hasNote?`\nNotitie: ${a.note}`:'')+`\n\nDeze data gaat verloren.`
                         if(!window.confirm(msg))return
                       }
-                      // Reset alle vervangdata
+                      onLog('aanwezig',`${sessLabel} → terug aanwezig${hasSub?' (vervanger '+a.sub+' verwijderd)':''}`)
                       setMA(sess.id,m.name,m.role,sess.duur,{aanwezig:true,sub:'',note:'',hours:parseDuur(sess.duur).toString()})
                     } else {
+                      onLog('afwezig',`${sessLabel} → afwezig gemarkeerd`)
                       setMA(sess.id,m.name,m.role,sess.duur,{aanwezig:false})
                     }
                   }} style={{padding:'4px 10px',borderRadius:20,border:'none',cursor:'pointer',fontWeight:600,fontSize:13,fontFamily:'inherit',background:present?'#dbeafe':'#fee2e2',color:present?'#1e3a8a':'#991b1b'}}>{m.name}</button>
                   <div style={{display:'flex',alignItems:'center',gap:3}}>
-                    <input type="number" step="0.25" min="0" max="12" value={a.hours} onChange={e=>setMA(sess.id,m.name,m.role,sess.duur,{hours:e.target.value})} style={{...S.inp,width:50,textAlign:'center',padding:'3px 5px',background:present?'#fff':'#fff8ed',borderColor:present?'#e2e8f0':'#fb923c'}}/>
+                    <input type="number" step="0.25" min="0" max="12" value={a.hours} onChange={e=>setMA(sess.id,m.name,m.role,sess.duur,{hours:e.target.value})} onBlur={e=>{const h=parseFloat(e.target.value);if(!isNaN(h)&&h!==parseDuur(sess.duur))onLog('uren_aangepast',`Uren voor ${m.name} aangepast naar ${h}u op ${sess.dag} ${LL[sess.type]||sess.type} @ ${curLoc.name}`)}} style={{...S.inp,width:50,textAlign:'center',padding:'3px 5px',background:present?'#fff':'#fff8ed',borderColor:present?'#e2e8f0':'#fb923c'}}/>
                     <span style={{fontSize:11,color:'#94a3b8'}}>u</span>
                   </div>
-                  {!present&&<input list={`sl-${sess.id}-${i}`} placeholder="Vervanger..." value={a.sub} onChange={e=>setMA(sess.id,m.name,m.role,sess.duur,{sub:e.target.value})} style={{...S.inp,width:145,background:'#fff8ed',borderColor:a.sub?'#22c55e':'#fb923c',color:'#92400e',padding:'3px 8px'}}/>}
+                  {!present&&<input list={`sl-${sess.id}-${i}`} placeholder="Vervanger..." value={a.sub} onChange={e=>setMA(sess.id,m.name,m.role,sess.duur,{sub:e.target.value})} onBlur={e=>{if(e.target.value.trim())onLog('vervanger_ingevuld',`Vervanger '${e.target.value.trim()}' ingevuld voor ${m.name}${m.role!=='lesgever'?' ('+m.role+')':''} op ${sess.dag} ${LL[sess.type]||sess.type} @ ${curLoc.name} (${fmtShort(getDayDate(week,sess.dag))})`)}} style={{...S.inp,width:145,background:'#fff8ed',borderColor:a.sub?'#22c55e':'#fb923c',color:'#92400e',padding:'3px 8px'}}/>}
                   <datalist id={`sl-${sess.id}-${i}`}>{sess.substitutes.map(s=><option key={s} value={s}/>)}{inames.map(n=><option key={n} value={n}/>)}</datalist>
                 </div>
                 {!present&&<div style={{marginLeft:4,marginTop:4}}>
-                  <input placeholder="Notitie voor vervanger (optioneel)..." value={a.note} onChange={e=>setMA(sess.id,m.name,m.role,sess.duur,{note:e.target.value})} style={{...S.inp,width:'100%',padding:'4px 9px',fontSize:12,background:'#f8fafc',borderColor:'#e2e8f0'}}/>
+                  <input placeholder="Notitie voor vervanger (optioneel)..." value={a.note} onChange={e=>setMA(sess.id,m.name,m.role,sess.duur,{note:e.target.value})} onBlur={e=>{if(e.target.value.trim())onLog('notitie_vervanging',`Notitie toegevoegd voor ${m.name} op ${sess.dag} ${LL[sess.type]||sess.type} @ ${curLoc.name}: "${e.target.value.trim()}"`)}} style={{...S.inp,width:'100%',padding:'4px 9px',fontSize:12,background:'#f8fafc',borderColor:'#e2e8f0'}}/>
                 </div>}
               </div>)
             })}
             {!editMode&&!conf&&!editing&&sess.members.length>0&&<button onClick={()=>{if(saving)return;setSaving(true);setTimeout(()=>setSaving(false),3000);confirmSess(sess)}} disabled={saving} style={{...S.btnP,marginTop:7,width:'100%',background:saving?'#94a3b8':'#0d9488',fontSize:12,padding:'6px',cursor:saving?'not-allowed':'pointer'}}>{saving?'Bezig...':'✓ Bevestigen → Maandoverzicht'}</button>}
             {!editMode&&editing&&<button onClick={()=>{if(saving)return;setSaving(true);setTimeout(()=>setSaving(false),3000);confirmSess(sess)}} disabled={saving} style={{...S.btnP,marginTop:7,width:'100%',background:saving?'#94a3b8':'#d97706',fontSize:12,padding:'6px'}}>✓ Opnieuw bevestigen</button>}
-            {conf&&!editMode&&<div style={{display:'flex',gap:8,marginTop:7}}>
-              <p style={{flex:1,fontSize:12,color:'#16a34a',margin:0,fontWeight:600,paddingTop:6}}>✓ Uren opgenomen</p>
-              <button onClick={()=>handleWijzigen(sess.id)} style={{...S.btnSm,background:'#fef9c3',color:'#92400e',fontSize:12}}>✏ Wijzigen</button>
+            {!editMode&&<div style={{display:'flex',gap:8,marginTop:7,alignItems:'center'}}>{
+              entries.some(e=>e._sessRef===sessRef(sess.id))
+                ?<p style={{flex:1,fontSize:12,color:'#16a34a',margin:0,fontWeight:600,paddingTop:6}}>✓ Uren opgenomen</p>
+                :<p style={{flex:1,fontSize:12,color:'#f59e0b',margin:0,fontWeight:600,paddingTop:6}}>✓ Bevestigd (afgelast)</p>
+            }<button onClick={()=>handleWijzigen(sess.id)} style={{...S.btnSm,background:'#fef9c3',color:'#92400e',fontSize:12}}>✏ Wijzigen</button>
             </div>}
           </div>
         </div>)
@@ -641,7 +677,7 @@ function Overzicht({sched,inst,entries,att,unlocked,onSaveEntries,onSaveAtt,onSa
 }
 
 // ─── UREN INVOEREN ────────────────────────────────────────────────────────────
-function Uren({inst,entries,onSave}){
+function Uren({inst,entries,onSave,onLog}){
   const today=new Date().toISOString().split('T')[0]
   const[f,setF]=useState({instId:'',date:today,loc:'',lt:'kids',hours:'',note:''})
   const[ok,setOk]=useState(false);const[fm,setFm]=useState(today.slice(0,7));const[del,setDel]=useState(null)
@@ -649,7 +685,7 @@ function Uren({inst,entries,onSave}){
   const sorted=[...inst].sort((a,b)=>a.name.localeCompare(b.name))
   const gi=id=>inst.find(i=>i.id===id)
   const amt=e=>{const i=gi(e.instId);return i?(i.rates[e.lt]||0)*e.hours:0}
-  const add=()=>{if(!f.instId||!f.date||!f.loc||!f.hours)return;onSave([{...f,id:uid(),hours:parseFloat(f.hours)},...entries]);setF(p=>({...p,instId:'',hours:'',note:''}));setOk(true);setTimeout(()=>setOk(false),2000)}
+  const add=()=>{if(!f.instId||!f.date||!f.loc||!f.hours)return;const iname=sorted.find(x=>x.id===f.instId)?.name||'?';onLog('uren_toegevoegd',`${parseFloat(f.hours)}u ${LL[f.lt]||f.lt} toegevoegd voor ${iname} @ ${f.loc} (${f.date})`);onSave([{...f,id:uid(),hours:parseFloat(f.hours)},...entries]);setF(p=>({...p,instId:'',hours:'',note:''}));setOk(true);setTimeout(()=>setOk(false),2000)}
   const rows=entries.filter(e=>e.date&&e.date.startsWith(fm)).sort((a,b)=>b.date.localeCompare(a.date))
   const tot=rows.reduce((s,e)=>s+amt(e),0)
   const pre=f.instId&&f.hours?(gi(f.instId)?.rates[f.lt]||0)*parseFloat(f.hours||0):null
@@ -679,7 +715,7 @@ function Uren({inst,entries,onSave}){
             <td style={S.td}>{e.date}</td><td style={{...S.td,fontWeight:500}}>{ins?ins.name:'?'}</td><td style={S.td}>{e.loc}</td><td style={S.td}>{LL[e.lt]||e.lt}</td>
             <td style={{...S.td,fontWeight:600}}>{e.hours}u</td><td style={{...S.td,fontWeight:600,color:'#0d9488'}}>{euro(amt(e))}</td>
             <td style={{...S.td,color:'#94a3b8',maxWidth:120,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>{e.note||'—'}</td>
-            <td style={S.td}>{del===e.id?<span style={{display:'flex',gap:4}}><button onClick={()=>{onSave(entries.filter(x=>x.id!==e.id));setDel(null)}} style={{...S.btnSm,background:'#fee2e2',color:'#dc2626'}}>Ja</button><button onClick={()=>setDel(null)} style={S.btnSm}>Nee</button></span>:<button onClick={()=>setDel(e.id)} style={{background:'none',border:'none',cursor:'pointer',color:'#cbd5e1',fontSize:17,padding:'0 4px'}}>×</button>}</td>
+            <td style={S.td}>{del===e.id?<span style={{display:'flex',gap:4}}><button onClick={()=>{const ins=gi(e.id);onLog('uren_verwijderd',`${e.hours}u ${LL[e.lt]||e.lt} verwijderd voor ${gi(e.instId)?.name||'?'} @ ${e.loc} (${e.date})`);onSave(entries.filter(x=>x.id!==e.id));setDel(null)}} style={{...S.btnSm,background:'#fee2e2',color:'#dc2626'}}>Ja</button><button onClick={()=>setDel(null)} style={S.btnSm}>Nee</button></span>:<button onClick={()=>setDel(e.id)} style={{background:'none',border:'none',cursor:'pointer',color:'#cbd5e1',fontSize:17,padding:'0 4px'}}>×</button>}</td>
           </tr>)})}
           </tbody>
         </table></div>
@@ -786,7 +822,7 @@ function Maand({inst,entries,paid,onSavePaid,onRefresh,onLog}){
 }
 
 // ─── NOTITIES ─────────────────────────────────────────────────────────────────
-function Notities({sched,att,inst,notes,onSaveNotes}){
+function Notities({sched,att,inst,notes,onSaveNotes,onLog}){
   const[subTab,setSubTab]=useState('vervanging')
   const[filterLoc,setFilterLoc]=useState('')
   const[filterInst,setFilterInst]=useState('')
@@ -829,6 +865,7 @@ function Notities({sched,att,inst,notes,onSaveNotes}){
   const addNote=()=>{
     if(!form.text.trim())return
     const locName=sched.find(l=>l.locId===form.locId)?.name||'Algemeen'
+    onLog('notitie_toegevoegd',`Manuele notitie toegevoegd${form.instName?' voor '+form.instName:''} @ ${locName||'Algemeen'}`)
     onSaveNotes([...notes,{id:uid(),locId:form.locId,locName,instName:form.instName,text:form.text.trim(),date:new Date().toISOString().split('T')[0],fromSub:false}])
     setForm({locId:'',instName:'',text:''})
   }
@@ -931,7 +968,7 @@ function Notities({sched,att,inst,notes,onSaveNotes}){
                   </div>
                   {del===n.id
                     ?<span style={{display:'flex',gap:4}}>
-                        <button onClick={()=>{onSaveNotes(notes.filter(x=>x.id!==n.id));setDel(null)}} style={{...S.btnSm,background:'#fee2e2',color:'#dc2626'}}>Ja</button>
+                        <button onClick={()=>{onLog('notitie_verwijderd',`Manuele notitie verwijderd${n.instName?' voor '+n.instName:''} @ ${n.locName||'Algemeen'}`);onSaveNotes(notes.filter(x=>x.id!==n.id));setDel(null)}} style={{...S.btnSm,background:'#fee2e2',color:'#dc2626'}}>Ja</button>
                         <button onClick={()=>setDel(null)} style={S.btnSm}>Nee</button>
                       </span>
                     :<button onClick={()=>setDel(n.id)} style={{background:'none',border:'none',cursor:'pointer',color:'#cbd5e1',fontSize:16,padding:'0 4px'}}>×</button>
