@@ -517,7 +517,7 @@ function Overzicht({sched,inst,entries,att,unlocked,conf,onSaveEntries,onSaveAtt
     const b=att[week]?.[loc]?.[sessId]?.[mk]
     const defH=parseDuur(duur).toString()
     if(!b)return{aanwezig:true,sub:'',hours:defH,note:''}
-    return{aanwezig:b.aanwezig!==false,sub:b.sub||'',hours:b.hours!==undefined&&b.hours!==''?b.hours:defH,note:b.note||''}
+    return{aanwezig:b.aanwezig!==false,sub:b.sub||'',hours:b.hours!==undefined?b.hours:defH,note:b.note||''}
   }
   const setMA=(sessId,name,role,duur,patch)=>{
     const mk=`${name}|${role||'lesgever'}`
