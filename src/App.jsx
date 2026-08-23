@@ -205,6 +205,21 @@ const AC={
 }
 
 const ii={...S.inp,width:'100%',padding:'8px 10px',boxSizing:'border-box'}
+
+// ── Schrijf-synchronisatie ───────────────────────────────────────────────────
+// Probleem: elke toetsaanslag schreef de volledige data naar Supabase, en de
+// realtime-subscription paste ook onze EIGEN echo's weer toe → velden sprongen
+// terug naar oudere waarden tijdens het typen.
+// Oplossing: (1) eigen echo's herkennen en negeren, (2) getypte wijzigingen
+// (sw_att) bufferen en pas 600ms na de laatste aanslag wegschrijven.
+const _selfWrites={}   // key -> [{s: exacte JSON-string die we schreven, t: tijdstip}]
+const _pending={}      // key -> {data, timer} — gebufferde write die nog moet vertrekken
+const _recordSelf=(k,d)=>{const now=Date.now();(_selfWrites[k]=_selfWrites[k]||[]).push({s:JSON.stringify(d),t:now});_selfWrites[k]=_selfWrites[k].filter(x=>now-x.t<20000)}
+const _isSelfEcho=(k,valueString)=>(_selfWrites[k]||[]).some(x=>x.s===valueString)
+const _flushKey=k=>{const p=_pending[k];if(!p)return Promise.resolve();clearTimeout(p.timer);delete _pending[k];_recordSelf(k,p.data);return dbSet(k,p.data)}
+const _flushAll=()=>{Object.keys(_pending).forEach(k=>_flushKey(k))}
+const DEBOUNCED_KEYS=['sw_att'] // alleen de "typ-intensieve" data bufferen; klikken blijven direct
+
 function SBadge({s}){const z=s==='zelfstandige';return <span style={{padding:'2px 7px',borderRadius:20,fontSize:11,fontWeight:600,background:z?'#fef9c3':'#dbeafe',color:z?'#854d0e':'#1e40af'}}>{z?'Zelfstandige':'Vrijwilliger'}</span>}
 function Title({t,s}){return <div style={{marginBottom:16}}><h2 style={{fontSize:20,fontWeight:700,color:'#0f172a',margin:'0 0 2px'}}>{t}</h2>{s&&<p style={{color:'#64748b',fontSize:13,margin:0}}>{s}</p>}</div>}
 function TypeBadge({type}){return <span style={{padding:'2px 7px',borderRadius:20,fontSize:11,fontWeight:600,background:'#dbeafe',color:'#1e3a8a'}}>{LL[type]||type}</span>}
@@ -244,6 +259,8 @@ export default function App(){
     try{const u=localStorage.getItem('sw_username');if(u)setUsername(u)}catch{}
     loadAll()
     const channel=supabase.channel('swimpay-rt').on('postgres_changes',{event:'UPDATE',schema:'public',table:'app_data'},({new:row})=>{
+      if(_isSelfEcho(row.id,row.value))return // onze eigen schrijfactie die terugkaatst — negeren, anders springen velden terug
+      if(_pending[row.id])return // we zijn zelf aan het typen op deze key; onze write vertrekt zo en overschrijft dit toch (last-write-wins)
       const v=JSON.parse(row.value)
       if(row.id==='sw_inst')setInst(migrateInst(v))
       else if(row.id==='sw_ent')setEntries(v)
@@ -257,10 +274,25 @@ export default function App(){
     else if(row.id==='sw_conf')setConf(v)
       setLastSync(new Date())
     }).subscribe()
-    return()=>supabase.removeChannel(channel)
+    // Gebufferde writes altijd wegschrijven vóór de pagina verdwijnt/verbergt
+    const flushOnHide=()=>{if(document.visibilityState==='hidden')_flushAll()}
+    document.addEventListener('visibilitychange',flushOnHide)
+    window.addEventListener('beforeunload',_flushAll)
+    return()=>{supabase.removeChannel(channel);document.removeEventListener('visibilitychange',flushOnHide);window.removeEventListener('beforeunload',_flushAll);_flushAll()}
   },[])
 
-  const sv=async(k,d,fn)=>{fn(d);await dbSet(k,d)}
+  // Lokale state wordt ALTIJD meteen bijgewerkt (geen typvertraging).
+  // sw_att (urenvelden e.d.) gaat gebufferd naar Supabase; al de rest direct.
+  const sv=async(k,d,fn)=>{
+    fn(d)
+    if(DEBOUNCED_KEYS.includes(k)){
+      if(_pending[k])clearTimeout(_pending[k].timer)
+      _pending[k]={data:d,timer:setTimeout(()=>_flushKey(k),600)}
+    }else{
+      _recordSelf(k,d)
+      await dbSet(k,d)
+    }
+  }
 
   const addLog=async(action,description)=>{
     let user='Onbekend';try{user=localStorage.getItem('sw_username')||'Onbekend'}catch{}
@@ -268,6 +300,7 @@ export default function App(){
     const current=await dbGet('sw_log')||[]
     const newLog=[entry,...current].slice(0,2000)
     setLog(newLog)
+    _recordSelf('sw_log',newLog)
     await dbSet('sw_log',newLog)
   }
 
@@ -285,7 +318,7 @@ export default function App(){
           <div style={{width:5,height:24,background:'#2dd4bf',borderRadius:3}}/>
           <span style={{color:'#fff',fontWeight:700,fontSize:16}}>SwimPay</span>
         </div>
-        {TABS.map(t=><button key={t.k} onClick={()=>setTab(t.k)} style={{padding:'0 12px',height:52,border:'none',cursor:'pointer',fontSize:12,fontWeight:500,fontFamily:'inherit',borderBottom:`2px solid ${tab===t.k?'#2dd4bf':'transparent'}`,background:'transparent',color:tab===t.k?'#2dd4bf':'rgba(255,255,255,0.55)'}}>{t.l}</button>)}
+        {TABS.map(t=><button key={t.k} onClick={()=>{_flushAll();setTab(t.k)}} style={{padding:'0 12px',height:52,border:'none',cursor:'pointer',fontSize:12,fontWeight:500,fontFamily:'inherit',borderBottom:`2px solid ${tab===t.k?'#2dd4bf':'transparent'}`,background:'transparent',color:tab===t.k?'#2dd4bf':'rgba(255,255,255,0.55)'}}>{t.l}</button>)}
         <div style={{marginLeft:'auto',marginRight:14,display:'flex',alignItems:'center',gap:8}}>
           {syncing&&<span style={{fontSize:11,color:'#5eead4'}}>⟳ Sync...</span>}
           {lastSync&&!syncing&&<span style={{fontSize:11,color:'rgba(255,255,255,0.3)'}}>✓ {lastSync.toLocaleTimeString('nl-BE',{hour:'2-digit',minute:'2-digit'})}</span>}
@@ -652,7 +685,7 @@ function Overzicht({sched,inst,entries,att,unlocked,conf,onSaveEntries,onSaveAtt
                     }
                   }} style={{padding:'4px 10px',borderRadius:20,border:'none',cursor:'pointer',fontWeight:600,fontSize:13,fontFamily:'inherit',background:present?'#dbeafe':'#fee2e2',color:present?'#1e3a8a':'#991b1b'}}>{m.name}</button>
                   <div style={{display:'flex',alignItems:'center',gap:3}}>
-                    <input type="number" step="0.25" min="0" max="12" value={a.hours} disabled={conf} title={conf?'Sessie is bevestigd — klik ✏ Wijzigen om uren aan te passen':''} onChange={e=>setMA(sess.id,m.name,m.role,sess.duur,{hours:e.target.value})} onBlur={e=>{const h=parseFloat(e.target.value);if(!isNaN(h)&&h!==parseDuur(sess.duur))onLog('uren_aangepast',`Uren voor ${m.name} aangepast naar ${h}u op ${sess.dag} ${LL[sess.type]||sess.type} @ ${curLoc.name}`)}} style={{...S.inp,width:50,textAlign:'center',padding:'3px 5px',background:conf?'#f1f5f9':present?'#fff':'#fff8ed',borderColor:present?'#e2e8f0':'#fb923c',opacity:conf?0.6:1,cursor:conf?'not-allowed':'auto'}}/>
+                    <input type="number" step="0.25" min="0" max="12" value={a.hours} disabled={conf} title={conf?'Sessie is bevestigd — klik ✏ Wijzigen om uren aan te passen':''} onWheel={e=>e.target.blur()} onChange={e=>setMA(sess.id,m.name,m.role,sess.duur,{hours:e.target.value})} onBlur={e=>{const h=parseFloat(e.target.value);if(!isNaN(h)&&h!==parseDuur(sess.duur))onLog('uren_aangepast',`Uren voor ${m.name} aangepast naar ${h}u op ${sess.dag} ${LL[sess.type]||sess.type} @ ${curLoc.name}`)}} style={{...S.inp,width:50,textAlign:'center',padding:'3px 5px',background:conf?'#f1f5f9':present?'#fff':'#fff8ed',borderColor:present?'#e2e8f0':'#fb923c',opacity:conf?0.6:1,cursor:conf?'not-allowed':'auto'}}/>
                     <span style={{fontSize:11,color:'#94a3b8'}}>u</span>
                   </div>
                   {!present&&<input list={`sl-${sess.id}-${i}`} placeholder="Vervanger..." value={a.sub} disabled={conf} title={conf?'Sessie is bevestigd — klik ✏ Wijzigen om aan te passen':a.sub&&!inames.includes(a.sub.trim())?'⚠ Deze naam staat niet in Lesgevers — er kunnen geen uren voor aangemaakt worden':''} onChange={e=>setMA(sess.id,m.name,m.role,sess.duur,{sub:e.target.value})} onBlur={e=>{if(e.target.value.trim())onLog('vervanger_ingevuld',`Vervanger '${e.target.value.trim()}' ingevuld voor ${m.name}${m.role!=='lesgever'?' ('+m.role+')':''} op ${sess.dag} ${LL[sess.type]||sess.type} @ ${curLoc.name} (${fmtShort(getDayDate(week,sess.dag))})`)}} style={{...S.inp,width:145,background:a.sub&&!inames.includes(a.sub.trim())?'#fef2f2':'#fff8ed',borderColor:a.sub?(inames.includes(a.sub.trim())?'#22c55e':'#dc2626'):'#fb923c',color:a.sub&&!inames.includes(a.sub.trim())?'#991b1b':'#92400e',padding:'3px 8px',opacity:conf?0.6:1,cursor:conf?'not-allowed':'auto'}}/>}
@@ -716,7 +749,7 @@ function Uren({inst,entries,onSave,onLog}){
         <div><label style={S.lbl}>Datum</label><input type="date" value={f.date} onChange={e=>setF(p=>({...p,date:e.target.value}))} style={ii}/></div>
         <div><label style={S.lbl}>Locatie</label><select value={f.loc} onChange={e=>setF(p=>({...p,loc:e.target.value}))} style={ii}><option value="">— Kies —</option>{locs.map(l=><option key={l}>{l}</option>)}</select></div>
         <div><label style={S.lbl}>Lestype</label><select value={f.lt} onChange={e=>setF(p=>({...p,lt:e.target.value}))} style={ii}>{LT.map(t=><option key={t} value={t}>{LL[t]}</option>)}</select></div>
-        <div><label style={S.lbl}>Uren</label><input type="number" step="0.25" min="0.25" max="12" placeholder="bv. 2" value={f.hours} onChange={e=>setF(p=>({...p,hours:e.target.value}))} style={ii}/></div>
+        <div><label style={S.lbl}>Uren</label><input type="number" step="0.25" min="0.25" max="12" placeholder="bv. 2" value={f.hours} onWheel={e=>e.target.blur()} onChange={e=>setF(p=>({...p,hours:e.target.value}))} style={ii}/></div>
         <div><label style={S.lbl}>Notitie</label><input type="text" placeholder="optioneel" value={f.note} onChange={e=>setF(p=>({...p,note:e.target.value}))} style={ii}/></div>
       </div>
       {pre!==null&&<div style={{background:'#f0fdf9',border:'1px solid #99f6e4',borderRadius:8,padding:'7px 12px',marginBottom:10,fontSize:13,color:'#0f766e'}}><b>{euro(pre)}</b> · €{gi(f.instId)?.rates[f.lt]}/u × {f.hours}u</div>}
@@ -861,6 +894,8 @@ function Maand({inst,entries,paid,sched,att,conf,onSavePaid,onRefresh,onLog}){
       ].filter(Boolean).join('\n')
       if(!window.confirm(msg))return
 
+      _recordSelf('sw_ent',finalEnt)
+      _recordSelf('sw_conf',finalConf)
       await dbSet('sw_ent',finalEnt)
       await dbSet('sw_conf',finalConf)
       onLog('herberekening',`Herberekening ${MNL[mo]} ${yr}: ${changedRefs.length} sessie(s) bijgewerkt${diffs.length?` — totalen gewijzigd voor: ${diffs.map(d=>d.name).join(', ')}`:''}${warnings.length?` (${warnings.length} waarschuwing(en))`:''}`)
@@ -1165,7 +1200,7 @@ function Lesgevers({inst,onSave,onLog}){
         </div>
         <p style={{...S.lbl,marginBottom:8}}>Tarieven (€/uur)</p>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10,marginBottom:12}}>
-          {LT.map(t=><div key={t}><label style={{...S.lbl,fontSize:9}}>{LL[t]}</label><input type="number" step="0.5" min="0" value={f.rates[t]||0} onChange={e=>setF(p=>({...p,rates:{...p.rates,[t]:parseFloat(e.target.value)||0}}))} style={ii}/></div>)}
+          {LT.map(t=><div key={t}><label style={{...S.lbl,fontSize:9}}>{LL[t]}</label><input type="number" step="0.5" min="0" value={f.rates[t]||0} onWheel={e=>e.target.blur()} onChange={e=>setF(p=>({...p,rates:{...p.rates,[t]:parseFloat(e.target.value)||0}}))} style={ii}/></div>)}
         </div>
         <div style={{background:'#f8fafc',borderRadius:8,padding:'7px 12px',marginBottom:12,fontSize:12,color:'#64748b'}}>Standaard: Toezichter €14/u · Redder €20/u · Hulp coörd. betalend: €10 (ZST) / €12,50 (VW)</div>
         <div style={{display:'flex',gap:10,justifyContent:'flex-end'}}><button onClick={()=>setModal(false)} style={S.btnS}>Annuleren</button><button onClick={save} style={S.btnP}>Opslaan</button></div>
