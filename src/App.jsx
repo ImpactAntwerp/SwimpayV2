@@ -166,6 +166,27 @@ function addStableIds(sched){
   })
 }
 
+// ── Versieplanning ───────────────────────────────────────────────────────────
+// De planning wordt opgeslagen als versies, elk geldig vanaf een bepaalde week
+// (maandag). Een wijziging in week X geldt voor week X en de toekomst; eerdere
+// weken behouden de planning die toen gold. Zo blijven prestaties en
+// herberekeningen van oude weken rekenen met de juiste (oude) planning.
+const SCHED_EPOCH='2000-01-03' // maandag, ver vóór alle data — ingangsdatum van de eerste versie
+const mkSchedVersions=locs=>({v:2,versions:[{from:SCHED_EPOCH,locs}]})
+const migrateSchedData=raw=>{
+  if(!raw)return null
+  if(Array.isArray(raw))return mkSchedVersions(addStableIds(raw)) // oud (ongeversioneerd) formaat
+  const vs=(raw.versions||[]).map(x=>({from:x.from,locs:addStableIds(x.locs||[])})).sort((a,b)=>a.from.localeCompare(b.from))
+  return{v:2,versions:vs.length?vs:[{from:SCHED_EPOCH,locs:[]}]}
+}
+// De planning zoals die geldt in een bepaalde week: laatste versie met from <= week
+const schedFor=(sv,week)=>{const vs=sv?.versions||[];let cur=vs[0]?.locs||[];for(const x of vs){if(x.from<=week)cur=x.locs;else break}return cur}
+const latestLocs=sv=>{const vs=sv?.versions||[];return vs.length?vs[vs.length-1].locs:[]}
+// De ingangsweek van de versie die in `week` actief is
+const schedFromOf=(sv,week)=>{const vs=sv?.versions||[];let cur=vs[0]?.from||SCHED_EPOCH;for(const x of vs){if(x.from<=week)cur=x.from;else break}return cur}
+// Nieuwe/bijgewerkte versie geldig vanaf `week`; latere versies blijven bestaan en winnen vanaf hun eigen ingangsweek
+const upsertSchedVersion=(sv,week,locs)=>({v:2,versions:[...(sv?.versions||[]).filter(x=>x.from!==week),{from:week,locs}].sort((a,b)=>a.from.localeCompare(b.from))})
+
 const S={
   inp:{padding:'7px 10px',border:'1px solid #e2e8f0',borderRadius:7,fontSize:13,fontFamily:'inherit',outline:'none',background:'#fff',color:'#0f172a'},
   td:{padding:'9px 14px',color:'#334155',verticalAlign:'middle'},
@@ -230,7 +251,7 @@ export default function App(){
   const [tab,setTab]=useState('dashboard')
   const [inst,setInst]=useState(INST)
   const [entries,setEntries]=useState([])
-  const [sched,setSched]=useState(()=>addStableIds(SCHED))
+  const [sched,setSched]=useState(()=>mkSchedVersions(addStableIds(SCHED)))
   const [att,setAtt]=useState({})
   const [comm,setComm]=useState({})
   const [notes,setNotes]=useState([])
@@ -248,7 +269,7 @@ export default function App(){
     const[i,e,sc,a,c,n,p,u]=await Promise.all([dbGet('sw_inst'),dbGet('sw_ent'),dbGet('sw_sched'),dbGet('sw_att'),dbGet('sw_comm'),dbGet('sw_notes'),dbGet('sw_paid'),dbGet('sw_unlocked')])
     if(i)setInst(migrateInst(i))
     if(e)setEntries(e)
-    if(sc){setSched(addStableIds(sc))}else{const ss=addStableIds(SCHED);setSched(ss);await dbSet('sw_sched',ss)}
+    if(sc){const m=migrateSchedData(sc);setSched(m);if(Array.isArray(sc)){_recordSelf('sw_sched',m);await dbSet('sw_sched',m)}}else{const ss=mkSchedVersions(addStableIds(SCHED));setSched(ss);_recordSelf('sw_sched',ss);await dbSet('sw_sched',ss)}
     if(a)setAtt(a);if(c)setComm(c);if(n)setNotes(n);if(p)setPaid(p);if(u)setUnlocked(u)
       const lg=await dbGet('sw_log');if(lg)setLog(lg)
       const cf=await dbGet('sw_conf');if(cf)setConf(cf)
@@ -264,7 +285,7 @@ export default function App(){
       const v=JSON.parse(row.value)
       if(row.id==='sw_inst')setInst(migrateInst(v))
       else if(row.id==='sw_ent')setEntries(v)
-      else if(row.id==='sw_sched')setSched(addStableIds(v))
+      else if(row.id==='sw_sched')setSched(migrateSchedData(v))
       else if(row.id==='sw_att')setAtt(v)
       else if(row.id==='sw_comm')setComm(v)
       else if(row.id==='sw_notes')setNotes(v)
@@ -361,7 +382,7 @@ function Dashboard({sched,att,inst,comm,entries,unlocked,conf,onSaveComm,onSaveA
   const allAbsences=useMemo(()=>{
     const r=[]
     Object.keys(att).forEach(wk=>{Object.keys(att[wk]).forEach(locId=>{
-      const loc=sched.find(l=>l.locId===locId);if(!loc)return
+      const loc=schedFor(sched,wk).find(l=>l.locId===locId);if(!loc)return
       Object.keys(att[wk][locId]).forEach(sessId=>{
         const sess=loc.sessions.find(s=>s.id===sessId);if(!sess)return
         const date=getDayDate(wk,sess.dag)
@@ -545,14 +566,16 @@ function Dashboard({sched,att,inst,comm,entries,unlocked,conf,onSaveComm,onSaveA
 function Overzicht({sched,inst,entries,att,unlocked,conf,onSaveEntries,onSaveAtt,onSaveSched,onSaveUnlocked,onSaveConf,onLog}){
   const thisMonday=getMon(new Date().toISOString().split('T')[0])
   const[week,setWeek]=useState(thisMonday)
-  const[loc,setLoc]=useState(sched[0]?.locId||'')
+  const[loc,setLoc]=useState(()=>schedFor(sched,getMon(new Date().toISOString().split('T')[0]))[0]?.locId||'')
   const[editMode,setEditMode]=useState(false)
   const[editId,setEditId]=useState(null)
   const[sf,setSf]=useState(null)
   const[saving,setSaving]=useState(false)
   const[nm,setNm]=useState('');const[ns,setNs]=useState('')
-  const curLoc=sched.find(l=>l.locId===loc)
+  const weekLocs=schedFor(sched,week)               // planning zoals die geldt in de geselecteerde week
+  const curLoc=weekLocs.find(l=>l.locId===loc)
   const weekEnd=addDays(week,6)
+  useEffect(()=>{if(!curLoc&&weekLocs.length)setLoc(weekLocs[0].locId)},[week,sched]) // locatie bestaat niet in deze versie → eerste kiezen
 
   const getAtt=(sessId,name,role,duur)=>{
     const mk=`${name}|${role||'lesgever'}`
@@ -612,11 +635,13 @@ function Overzicht({sched,inst,entries,att,unlocked,conf,onSaveEntries,onSaveAtt
     if((conf||[]).includes(ref))onSaveConf((conf||[]).filter(r=>r!==ref))
   }
 
-  const updLoc=u=>onSaveSched(sched.map(l=>l.locId===loc?{...l,...u}:l))
-  const delS=id=>{const s=curLoc.sessions.find(x=>x.id===id);onLog('sessie_verwijderd',`Sessie verwijderd: ${s?.dag} ${LL[s?.type]||s?.type} @ ${curLoc.name}`);updLoc({sessions:curLoc.sessions.filter(s=>s.id!==id)})}
+  // Planningswijziging = nieuwe versie geldig vanaf de geselecteerde week.
+  // Eerdere weken behouden de oude planning (en dus de juiste prestaties/uitbetaling).
+  const updLoc=u=>onSaveSched(upsertSchedVersion(sched,week,weekLocs.map(l=>l.locId===loc?{...l,...u}:l)))
+  const delS=id=>{const s=curLoc.sessions.find(x=>x.id===id);onLog('sessie_verwijderd',`Sessie verwijderd: ${s?.dag} ${LL[s?.type]||s?.type} @ ${curLoc.name} — geldig vanaf week ${fmtShort(week)}`);updLoc({sessions:curLoc.sessions.filter(s=>s.id!==id)})}
   const openEdit=sess=>{setSf({...sess,members:sess.members.map(m=>({...m})),substitutes:[...sess.substitutes]});setEditId(sess.id)}
   const openNew=()=>{setSf({dag:'Maandag',type:'kids',duur:'2u',members:[],substitutes:[]});setEditId('new')}
-  const saveSess=()=>{onLog('sessie_planning',editId==='new'?`Nieuwe sessie toegevoegd: ${sf.dag} ${LL[sf.type]||sf.type} @ ${curLoc?.name}`:`Sessie bewerkt: ${sf.dag} ${LL[sf.type]||sf.type} @ ${curLoc?.name}`);if(editId==='new'){const newId=`${loc}_${sf.dag}_${sf.type}`.toLowerCase().replace(/[^a-z0-9]/g,'');const idx=curLoc.sessions.filter(s=>s.id.startsWith(newId)).length;updLoc({sessions:[...curLoc.sessions,{...sf,id:idx?`${newId}_${idx+1}`:newId}]})}else updLoc({sessions:curLoc.sessions.map(s=>s.id===editId?sf:s)});setEditId(null);setSf(null);setNm('');setNs('')}
+  const saveSess=()=>{onLog('sessie_planning',(editId==='new'?`Nieuwe sessie toegevoegd: ${sf.dag} ${LL[sf.type]||sf.type} @ ${curLoc?.name}`:`Sessie bewerkt: ${sf.dag} ${LL[sf.type]||sf.type} @ ${curLoc?.name}`)+` — geldig vanaf week ${fmtShort(week)}`);if(editId==='new'){const newId=`${loc}_${sf.dag}_${sf.type}`.toLowerCase().replace(/[^a-z0-9]/g,'');const idx=curLoc.sessions.filter(s=>s.id.startsWith(newId)).length;updLoc({sessions:[...curLoc.sessions,{...sf,id:idx?`${newId}_${idx+1}`:newId}]})}else updLoc({sessions:curLoc.sessions.map(s=>s.id===editId?sf:s)});setEditId(null);setSf(null);setNm('');setNs('')}
   const addM=()=>{const n=nm.trim();if(!n)return;if(!inames.includes(n)&&!window.confirm(`⚠ '${n}' staat niet in het tabblad Lesgevers.\nDeze persoon kan géén uren krijgen tot die daar is toegevoegd.\n\nToch toevoegen aan de planning?`))return;setSf(f=>({...f,members:[...f.members,{name:n,role:'lesgever'}]}));setNm('')}
   const delM=i=>setSf(f=>({...f,members:f.members.filter((_,j)=>j!==i)}))
   const setR=(i,r)=>setSf(f=>({...f,members:f.members.map((m,j)=>j===i?{...m,role:r}:m)}))
@@ -639,7 +664,7 @@ function Overzicht({sched,inst,entries,att,unlocked,conf,onSaveEntries,onSaveAtt
         {editMode&&<button onClick={openNew} style={S.btnP}>+ Sessie</button>}
       </div>
     </div>
-    <div style={{display:'flex',gap:6,marginBottom:14,flexWrap:'wrap'}}>{sched.map(l=><button key={l.locId} onClick={()=>setLoc(l.locId)} style={{padding:'6px 12px',borderRadius:8,border:loc===l.locId?'none':'1px solid #e2e8f0',cursor:'pointer',fontSize:13,fontWeight:500,fontFamily:'inherit',background:loc===l.locId?'#0f2133':'#fff',color:loc===l.locId?'#2dd4bf':'#475569'}}>{l.name} <span style={{fontSize:11,opacity:0.5}}>{l.stad}</span></button>)}</div>
+    <div style={{display:'flex',gap:6,marginBottom:14,flexWrap:'wrap'}}>{weekLocs.map(l=><button key={l.locId} onClick={()=>setLoc(l.locId)} style={{padding:'6px 12px',borderRadius:8,border:loc===l.locId?'none':'1px solid #e2e8f0',cursor:'pointer',fontSize:13,fontWeight:500,fontFamily:'inherit',background:loc===l.locId?'#0f2133':'#fff',color:loc===l.locId?'#2dd4bf':'#475569'}}>{l.name} <span style={{fontSize:11,opacity:0.5}}>{l.stad}</span></button>)}</div>
     {curLoc&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(340px,1fr))',gap:13}}>
       {sorted.map(sess=>{
         const date=getDayDate(week,sess.dag);const tc=TC[sess.type]||['#f3e8ff','#4c1d95']
@@ -796,7 +821,7 @@ function Maand({inst,entries,paid,sched,att,conf,onSavePaid,onRefresh,onLog}){
       const[fi,fe,fs,fa,fc]=await Promise.all([dbGet('sw_inst'),dbGet('sw_ent'),dbGet('sw_sched'),dbGet('sw_att'),dbGet('sw_conf')])
       const cInst=fi?migrateInst(fi):inst
       const cEnt=fe||entries||[]
-      const cSched=fs?addStableIds(fs):sched
+      const cSchedV=migrateSchedData(fs||sched) // versieplanning; oud arrayformaat wordt automatisch gemigreerd
       const cAtt=fa||att||{}
       const cConf=fc||conf||[]
       const ms2=`${yr}-${String(mo+1).padStart(2,'0')}`
@@ -810,7 +835,9 @@ function Maand({inst,entries,paid,sched,att,conf,onSavePaid,onRefresh,onLog}){
       cEnt.forEach(e=>{if(e._sessRef){(entByRef[e._sessRef]=entByRef[e._sessRef]||[]).push(e)}})
 
       const visited=new Set(),newByRef={},warnings=[]
-      cSched.forEach(locObj=>locObj.sessions.forEach(sess=>mondays.forEach(wk=>{
+      // Per week de planningsversie gebruiken die in DIE week geldt: prestaties van
+      // vóór een planningswijziging worden dus herberekend met de oude planning.
+      mondays.forEach(wk=>schedFor(cSchedV,wk).forEach(locObj=>locObj.sessions.forEach(sess=>{
         const date=getDayDate(wk,sess.dag)
         if(!date.startsWith(ms2))return // maandgrens: filteren op sessiedatum, niet op week
         const ref=`${wk}_${locObj.locId}_${sess.id}`
@@ -1008,7 +1035,7 @@ function Notities({sched,att,inst,notes,onSaveNotes,onLog}){
   const subNotes=useMemo(()=>{
     const r=[]
     Object.keys(att).forEach(wk=>{Object.keys(att[wk]).forEach(locId=>{
-      const loc=sched.find(l=>l.locId===locId);if(!loc)return
+      const loc=schedFor(sched,wk).find(l=>l.locId===locId);if(!loc)return
       Object.keys(att[wk][locId]).forEach(sessId=>{
         const sess=loc.sessions.find(s=>s.id===sessId);if(!sess)return
         const date=getDayDate(wk,sess.dag)
@@ -1039,7 +1066,7 @@ function Notities({sched,att,inst,notes,onSaveNotes,onLog}){
 
   const addNote=()=>{
     if(!form.text.trim())return
-    const locName=sched.find(l=>l.locId===form.locId)?.name||'Algemeen'
+    const locName=latestLocs(sched).find(l=>l.locId===form.locId)?.name||'Algemeen'
     onLog('notitie_toegevoegd',`Manuele notitie toegevoegd${form.instName?' voor '+form.instName:''} @ ${locName||'Algemeen'}`)
     onSaveNotes([...notes,{id:uid(),locId:form.locId,locName,instName:form.instName,text:form.text.trim(),date:new Date().toISOString().split('T')[0],fromSub:false}])
     setForm({locId:'',instName:'',text:''})
@@ -1064,7 +1091,7 @@ function Notities({sched,att,inst,notes,onSaveNotes,onLog}){
     {/* Filter balk */}
     <div style={{display:'flex',gap:10,marginBottom:14,flexWrap:'wrap',alignItems:'center'}}>
       <select value={filterLoc} onChange={e=>setFilterLoc(e.target.value)} style={{...S.inp,width:'auto',padding:'6px 10px'}}>
-        <option value="">Alle locaties</option>{sched.map(l=><option key={l.locId} value={l.locId}>{l.name}</option>)}
+        <option value="">Alle locaties</option>{latestLocs(sched).map(l=><option key={l.locId} value={l.locId}>{l.name}</option>)}
       </select>
       <input value={filterInst} onChange={e=>setFilterInst(e.target.value)} placeholder="Filter op lesgever..." style={{...S.inp,width:200}}/>
       {(filterLoc||filterInst)&&<button onClick={()=>{setFilterLoc('');setFilterInst('')}} style={S.btnSm}>✕ Reset</button>}
@@ -1111,7 +1138,7 @@ function Notities({sched,att,inst,notes,onSaveNotes,onLog}){
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:10}}>
           <div><label style={S.lbl}>Locatie</label>
             <select value={form.locId} onChange={e=>setForm(p=>({...p,locId:e.target.value}))} style={{...ii,padding:'8px 10px'}}>
-              <option value="">Geen / Algemeen</option>{sched.map(l=><option key={l.locId} value={l.locId}>{l.name}</option>)}
+              <option value="">Geen / Algemeen</option>{latestLocs(sched).map(l=><option key={l.locId} value={l.locId}>{l.name}</option>)}
             </select>
           </div>
           <div><label style={S.lbl}>Lesgever (optioneel)</label>
