@@ -7,7 +7,7 @@ const LL={kids:'Kids',volwassenen:'Volwassenen',coordinator:'Coördinator',redde
 const MNL=['Januari','Februari','Maart','April','Mei','Juni','Juli','Augustus','September','Oktober','November','December']
 const ROLES=['lesgever','coordinator','redder','onthaalmedewerker','toezichter','hulp_coordinator_np','hulp_coordinator_p']
 const RC={lesgever:['#dbeafe','#1e3a8a'],coordinator:['#d1fae5','#064e3b'],redder:['#fee2e2','#991b1b'],onthaalmedewerker:['#fef3c7','#92400e'],toezichter:['#f3e8ff','#6b21a8'],hulp_coordinator_np:['#f1f5f9','#475569'],hulp_coordinator_p:['#fef3c7','#713f12']}
-const DAY_IDX={Maandag:0,Dinsdag:1,Woensdag:2,Donderdag:3,Vrijdag:4,Zaterdag:5}
+const DAY_IDX={Maandag:0,Dinsdag:1,Woensdag:2,Donderdag:3,Vrijdag:4,Zaterdag:5,Zondag:6}
 
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
 function euro(n){const v=parseFloat(n||0);return'€ '+(isNaN(v)?'0,00':v.toFixed(2).replace('.',','))}
@@ -223,6 +223,7 @@ const AC={
   export:{l:'Excel export',c:'#475569',bg:'#f1f5f9'},
   herberekening:{l:'Herberekening',c:'#7c3aed',bg:'#ede9fe'},
   sessie_ontgrendeld:{l:'Sessie ontgrendeld',c:'#d97706',bg:'#fef3c7'},
+  datumcontrole:{l:'Datumcontrole',c:'#0891b2',bg:'#cffafe'},
 }
 
 const ii={...S.inp,width:'100%',padding:'8px 10px',boxSizing:'border-box'}
@@ -596,6 +597,7 @@ function Overzicht({sched,inst,entries,att,unlocked,conf,onSaveEntries,onSaveAtt
   const isUnlocked=sessId=>unlocked.includes(sessRef(sessId))
 
   const confirmSess=(sess)=>{
+    if(!(sess.dag in DAY_IDX)){alert(`⚠ Deze sessie heeft een ongeldige dag ('${sess.dag||'leeg'}') en kan niet bevestigd worden — de datum zou verkeerd berekend worden.\nPas de sessie eerst aan via ⚙ Planning bewerken.`);return}
     const ref=sessRef(sess.id)
     const isRedo=isUnlocked(sess.id)
     const base=isRedo?entries.filter(e=>e._sessRef!==ref):entries
@@ -640,8 +642,8 @@ function Overzicht({sched,inst,entries,att,unlocked,conf,onSaveEntries,onSaveAtt
   const updLoc=u=>onSaveSched(upsertSchedVersion(sched,week,weekLocs.map(l=>l.locId===loc?{...l,...u}:l)))
   const delS=id=>{const s=curLoc.sessions.find(x=>x.id===id);onLog('sessie_verwijderd',`Sessie verwijderd: ${s?.dag} ${LL[s?.type]||s?.type} @ ${curLoc.name} — geldig vanaf week ${fmtShort(week)}`);updLoc({sessions:curLoc.sessions.filter(s=>s.id!==id)})}
   const openEdit=sess=>{setSf({...sess,members:sess.members.map(m=>({...m})),substitutes:[...sess.substitutes]});setEditId(sess.id)}
-  const openNew=()=>{setSf({dag:'Maandag',type:'kids',duur:'2u',members:[],substitutes:[]});setEditId('new')}
-  const saveSess=()=>{onLog('sessie_planning',(editId==='new'?`Nieuwe sessie toegevoegd: ${sf.dag} ${LL[sf.type]||sf.type} @ ${curLoc?.name}`:`Sessie bewerkt: ${sf.dag} ${LL[sf.type]||sf.type} @ ${curLoc?.name}`)+` — geldig vanaf week ${fmtShort(week)}`);if(editId==='new'){const newId=`${loc}_${sf.dag}_${sf.type}`.toLowerCase().replace(/[^a-z0-9]/g,'');const idx=curLoc.sessions.filter(s=>s.id.startsWith(newId)).length;updLoc({sessions:[...curLoc.sessions,{...sf,id:idx?`${newId}_${idx+1}`:newId}]})}else updLoc({sessions:curLoc.sessions.map(s=>s.id===editId?sf:s)});setEditId(null);setSf(null);setNm('');setNs('')}
+  const openNew=()=>{setSf({dag:'',type:'kids',duur:'2u',members:[],substitutes:[]});setEditId('new')}
+  const saveSess=()=>{if(!(sf.dag in DAY_IDX)){alert('⚠ Kies eerst een dag voor deze sessie.');return}onLog('sessie_planning',(editId==='new'?`Nieuwe sessie toegevoegd: ${sf.dag} ${LL[sf.type]||sf.type} @ ${curLoc?.name}`:`Sessie bewerkt: ${sf.dag} ${LL[sf.type]||sf.type} @ ${curLoc?.name}`)+` — geldig vanaf week ${fmtShort(week)}`);if(editId==='new'){const newId=`${loc}_${sf.dag}_${sf.type}`.toLowerCase().replace(/[^a-z0-9]/g,'');const idx=curLoc.sessions.filter(s=>s.id.startsWith(newId)).length;updLoc({sessions:[...curLoc.sessions,{...sf,id:idx?`${newId}_${idx+1}`:newId}]})}else updLoc({sessions:curLoc.sessions.map(s=>s.id===editId?sf:s)});setEditId(null);setSf(null);setNm('');setNs('')}
   const addM=()=>{const n=nm.trim();if(!n)return;if(!inames.includes(n)&&!window.confirm(`⚠ '${n}' staat niet in het tabblad Lesgevers.\nDeze persoon kan géén uren krijgen tot die daar is toegevoegd.\n\nToch toevoegen aan de planning?`))return;setSf(f=>({...f,members:[...f.members,{name:n,role:'lesgever'}]}));setNm('')}
   const delM=i=>setSf(f=>({...f,members:f.members.filter((_,j)=>j!==i)}))
   const setR=(i,r)=>setSf(f=>({...f,members:f.members.map((m,j)=>j===i?{...m,role:r}:m)}))
@@ -737,7 +739,7 @@ function Overzicht({sched,inst,entries,att,unlocked,conf,onSaveEntries,onSaveAtt
       <div style={{background:'#fff',borderRadius:14,padding:24,width:'100%',maxWidth:510,maxHeight:'88vh',overflowY:'auto',boxShadow:'0 20px 60px rgba(0,0,0,0.25)'}}>
         <h3 style={{fontSize:16,fontWeight:700,margin:'0 0 14px'}}>{editId==='new'?'Nieuwe sessie':'Sessie bewerken'}</h3>
         <div style={{display:'grid',gridTemplateColumns:'1fr 1fr 1fr',gap:10,marginBottom:13}}>
-          <div><label style={S.lbl}>Dag</label><select value={sf.dag} onChange={e=>setSf(f=>({...f,dag:e.target.value}))} style={{...S.inp,width:'100%'}}>{Object.keys(DAY_IDX).map(d=><option key={d}>{d}</option>)}</select></div>
+          <div><label style={S.lbl}>Dag</label><select value={sf.dag} onChange={e=>setSf(f=>({...f,dag:e.target.value}))} style={{...S.inp,width:'100%',borderColor:sf.dag?'#e2e8f0':'#dc2626'}}><option value="" disabled>— kies dag —</option>{Object.keys(DAY_IDX).map(d=><option key={d}>{d}</option>)}</select></div>
           <div><label style={S.lbl}>Type</label><select value={sf.type} onChange={e=>setSf(f=>({...f,type:e.target.value}))} style={{...S.inp,width:'100%'}}>{['kids','volwassenen'].map(t=><option key={t} value={t}>{LL[t]}</option>)}</select></div>
           <div><label style={S.lbl}>Duur</label><input value={sf.duur} onChange={e=>setSf(f=>({...f,duur:e.target.value}))} style={{...S.inp,width:'100%'}} placeholder="2u"/></div>
         </div>
@@ -807,6 +809,69 @@ function Maand({inst,entries,paid,sched,att,conf,onSavePaid,onRefresh,onLog}){
   const[herberekend,setHerberekend]=useState(false)
   const[busy,setBusy]=useState(false)
 
+  // Datumcontrole: spoort prestaties op waarvan de datum niet klopt met de planning
+  // van die week — bv. entries van een (intussen verwijderde) spooksessie, of van
+  // een sessie met ongeldige dag (die stil op maandag gedateerd werd).
+  const handleDatumcontrole=async()=>{
+    if(busy)return
+    setBusy(true)
+    try{
+      const[fe,fs]=await Promise.all([dbGet('sw_ent'),dbGet('sw_sched')])
+      const cEnt=fe||entries||[]
+      const sv2=migrateSchedData(fs||sched)
+      const ms2=`${yr}-${String(mo+1).padStart(2,'0')}`
+      const nmOf=id=>inst.find(i=>i.id===id)?.name||'?'
+      const ghosts=[],mismatch=[],badDay=[]
+      cEnt.filter(e=>e._sessRef&&e.date&&e.date.startsWith(ms2)).forEach(e=>{
+        const wk=e._sessRef.slice(0,10)
+        const rest=e._sessRef.slice(11)
+        const us=rest.indexOf('_')
+        const locId=rest.slice(0,us),sessId=rest.slice(us+1)
+        const locObj=schedFor(sv2,wk).find(l=>l.locId===locId)
+        const sess=locObj?.sessions.find(s=>s.id===sessId)
+        const line=`${e.date} · ${e.loc} · ${nmOf(e.instId)} · ${e.hours}u ${LL[e.lt]||e.lt} · ${euro((parseFloat(inst.find(i=>i.id===e.instId)?.rates?.[e.lt])||0)*e.hours)}`
+        if(!locObj||!sess){ghosts.push({e,line});return}
+        if(!(sess.dag in DAY_IDX)){badDay.push({e,line:`${line} — sessie-dag '${sess.dag||'leeg'}' is ongeldig`});return}
+        const expect=getDayDate(wk,sess.dag)
+        if(expect!==e.date)mismatch.push({e,line:`${line} → hoort op ${fmtShort(expect)} (${sess.dag})`})
+      })
+      // Dubbele sessies (zelfde locatie+dag+type) in de planningsversies van deze maand
+      const dupes=new Set()
+      const mondays2=[];const lastD=new Date(yr,mo+1,0).getDate()
+      for(let m=getMon(`${ms2}-01`);m<=`${ms2}-${String(lastD).padStart(2,'0')}`;m=addDays(m,7))mondays2.push(m)
+      mondays2.forEach(wk=>schedFor(sv2,wk).forEach(l=>{
+        const cnt={}
+        l.sessions.forEach(s=>{const k=`${l.name} · ${s.dag} ${LL[s.type]||s.type}`;cnt[k]=(cnt[k]||0)+1})
+        Object.entries(cnt).forEach(([k,c])=>{if(c>1)dupes.add(`${k} staat ${c}× in de planning (week ${fmtShort(wk)})`)})
+      }))
+      if(!ghosts.length&&!mismatch.length&&!badDay.length&&!dupes.size){
+        alert(`✓ Datumcontrole ${MNL[mo]} ${yr}: geen afwijkingen gevonden.\nAlle sessie-prestaties van deze maand kloppen met de planning van hun week.`)
+        return
+      }
+      const parts=[`DATUMCONTROLE ${MNL[mo].toUpperCase()} ${yr}`]
+      if(ghosts.length)parts.push(`\n👻 SPOOKPRESTATIES — de sessie bestaat niet (meer) in de planning van die week:\n${ghosts.map(g=>'  '+g.line).join('\n')}`)
+      if(mismatch.length)parts.push(`\n📅 VERKEERDE DATUM — sessie bestaat, maar de datum klopt niet met de sessie-dag:\n${mismatch.map(m2=>'  '+m2.line).join('\n')}\n  → Druk op 🔄 Herbereken om deze datums te corrigeren.`)
+      if(badDay.length)parts.push(`\n⚠ ONGELDIGE SESSIE-DAG:\n${badDay.map(b=>'  '+b.line).join('\n')}\n  → Pas de dag van deze sessie aan via ⚙ Planning bewerken.`)
+      if(dupes.size)parts.push(`\n⚠ DUBBELE SESSIES IN PLANNING (risico op dubbele uitbetaling):\n${[...dupes].map(d=>'  '+d).join('\n')}`)
+      if(!ghosts.length){alert(parts.join('\n'));return}
+      const tot=ghosts.reduce((s,g)=>s+(parseFloat(inst.find(i=>i.id===g.e.instId)?.rates?.[g.e.lt])||0)*g.e.hours,0)
+      parts.push(`\n────────────\nWil je de ${ghosts.length} spookprestatie(s) hierboven (samen ${euro(tot)}) VERWIJDEREN?\n\n⚠ Controleer eerst of de uren écht niet gepresteerd zijn — is er wél gewerkt maar op een andere datum, verwijder ze dan ook en zet ze correct terug via 'Uren invoeren'.\n\nOK = verwijderen · Annuleren = niets wijzigen`)
+      if(!window.confirm(parts.join('\n')))return
+      const delIds=new Set(ghosts.map(g=>g.e.id))
+      const finalEnt=cEnt.filter(e=>!delIds.has(e.id))
+      _recordSelf('sw_ent',finalEnt)
+      await dbSet('sw_ent',finalEnt)
+      onLog('datumcontrole',`Datumcontrole ${MNL[mo]} ${yr}: ${ghosts.length} spookprestatie(s) verwijderd (${euro(tot)}): ${ghosts.map(g=>`${nmOf(g.e.instId)} ${g.e.date} ${g.e.hours}u`).join('; ')}`)
+      await onRefresh()
+      alert(`✓ ${ghosts.length} spookprestatie(s) verwijderd. Controleer het maandoverzicht en vul waar nodig correcte uren aan via 'Uren invoeren'.`)
+    }catch(err){
+      console.error('Datumcontrole mislukt:',err)
+      alert('⚠ Datumcontrole mislukt: '+(err?.message||err)+'\nEr is niets gewijzigd.')
+    }finally{
+      setBusy(false)
+    }
+  }
+
   // Echte herberekening: alle BEVESTIGDE sessies van de gekozen maand worden opnieuw
   // opgebouwd uit de actuele aanwezigheidsdata (att) + planning + tarieven.
   // - Manuele invoer (entries zonder _sessRef) wordt NOOIT aangeraakt.
@@ -838,6 +903,15 @@ function Maand({inst,entries,paid,sched,att,conf,onSavePaid,onRefresh,onLog}){
       // Per week de planningsversie gebruiken die in DIE week geldt: prestaties van
       // vóór een planningswijziging worden dus herberekend met de oude planning.
       mondays.forEach(wk=>schedFor(cSchedV,wk).forEach(locObj=>locObj.sessions.forEach(sess=>{
+        if(!(sess.dag in DAY_IDX)){
+          // Ongeldige dag → datum niet betrouwbaar te berekenen. Bevestigde entries ongewijzigd laten en melden.
+          const refX=`${wk}_${locObj.locId}_${sess.id}`
+          if((entByRef[refX]||[]).some(e=>e.date&&e.date.startsWith(ms2))||cConf.includes(refX)){
+            visited.add(refX)
+            warnings.push(`${locObj.name} · sessie '${sess.id}' heeft ongeldige dag ('${sess.dag||'leeg'}') → ongewijzigd gelaten; pas de planning aan`)
+          }
+          return
+        }
         const date=getDayDate(wk,sess.dag)
         if(!date.startsWith(ms2))return // maandgrens: filteren op sessiedatum, niet op week
         const ref=`${wk}_${locObj.locId}_${sess.id}`
@@ -1014,6 +1088,7 @@ function Maand({inst,entries,paid,sched,att,conf,onSavePaid,onRefresh,onLog}){
         <select value={mo} onChange={e=>setMo(+e.target.value)} style={{...S.inp,padding:'6px 10px'}}>{MNL.map((m,i)=><option key={i} value={i}>{m}</option>)}</select>
         <select value={yr} onChange={e=>setYr(+e.target.value)} style={{...S.inp,width:82,padding:'6px 10px'}}>{[2025,2026,2027].map(y=><option key={y}>{y}</option>)}</select>
         <button onClick={exportXL} style={{...S.btnP,background:'#0d9488'}}>↓ Excel</button>
+          <button onClick={handleDatumcontrole} disabled={busy} title="Controleert of alle sessie-prestaties van deze maand kloppen met de planning van hun week (spoort spookprestaties en verkeerde datums op)." style={{...S.btnP,background:busy?'#94a3b8':'#0891b2',display:'flex',alignItems:'center',gap:6,cursor:busy?'not-allowed':'pointer'}}>🔍 Datumcontrole</button>
           <button onClick={handleHerbereken} disabled={busy} title="Herberekent alle bevestigde sessies van deze maand uit de actuele aanwezigheidsdata. Manuele invoer blijft behouden." style={{...S.btnP,background:busy?'#94a3b8':'#7c3aed',display:'flex',alignItems:'center',gap:6,minWidth:140,cursor:busy?'not-allowed':'pointer'}}>{busy?'⏳ Bezig...':herberekend?'✓ Bijgewerkt!':'🔄 Herbereken'}</button>
       </div>
     </div>
