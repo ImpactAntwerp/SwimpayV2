@@ -17,6 +17,11 @@ function getDayDate(mon,dag){return addDays(mon,DAY_IDX[dag]||0)}
 function fmtShort(ds){return new Date(ds).toLocaleDateString('nl-BE',{day:'numeric',month:'short'})}
 function fmtDate(ds){return new Date(ds).toLocaleDateString('nl-BE',{day:'numeric',month:'long',year:'numeric'})}
 function parseDuur(s){if(!s)return 2;const m=s.match(/(\d+)u(\d+)?/);if(!m)return 2;return parseInt(m[1])+(m[2]?parseInt(m[2])/60:0)}
+// Structureel standaarduur per persoon binnen een sessie (uit het planningssjabloon).
+// Ingevuld en geldig → dat aantal uren; anders de sessieduur. Dit veld leeft op het
+// lid in de planning en reist dus mee met de versieplanning: aanpassen in week X
+// geldt vanaf week X en de toekomst, voorgaande weken behouden hun oude standaard.
+const memberDefH=(m,duur)=>{const v=parseFloat(m?.defHours);return !isNaN(v)&&v>0?v:parseDuur(duur)}
 function parseKey(key){const i1=key.indexOf('_'),i2=key.indexOf('_',i1+1),i3=key.indexOf('_',i2+1);const mk=key.slice(i3+1);const[name,memberRole]=mk.includes('|')?mk.split('|'):[mk,'lesgever'];return{wk:key.slice(0,i1),locId:key.slice(i1+1,i2),sessId:key.slice(i2+1,i3),mk,name,memberRole}}
 
 const Z=(id,n,k,v,c,r,ib='',em='')=>({id,name:n,status:'zelfstandige',email:em,rates:{kids:k,volwassenen:v,coordinator:c||v,redder:r||0,onthaalmedewerker:12.5,toezichter:14,hulp_coordinator_np:0,hulp_coordinator_p:10},iban:ib})
@@ -224,6 +229,8 @@ const AC={
   herberekening:{l:'Herberekening',c:'#7c3aed',bg:'#ede9fe'},
   sessie_ontgrendeld:{l:'Sessie ontgrendeld',c:'#d97706',bg:'#fef3c7'},
   datumcontrole:{l:'Datumcontrole',c:'#0891b2',bg:'#cffafe'},
+  locatie_toegevoegd:{l:'Locatie toegevoegd',c:'#4f46e5',bg:'#e0e7ff'},
+  locatie_hernoemd:{l:'Locatie hernoemd',c:'#4f46e5',bg:'#e0e7ff'},
 }
 
 const ii={...S.inp,width:'100%',padding:'8px 10px',boxSizing:'border-box'}
@@ -349,7 +356,7 @@ export default function App(){
       <main style={{padding:'22px 26px',maxWidth:1200,margin:'0 auto'}}>
         {tab==='dashboard'&&<Dashboard sched={sched} att={att} inst={inst} comm={comm} entries={entries} unlocked={unlocked} conf={conf} onSaveComm={d=>sv('sw_comm',d,setComm)} onSaveAtt={d=>sv('sw_att',d,setAtt)} onSaveUnlocked={d=>sv('sw_unlocked',d,setUnlocked)} onSaveConf={d=>sv('sw_conf',d,setConf)} onLog={addLog}/>}
         {tab==='overzicht'&&<Overzicht sched={sched} inst={inst} entries={entries} att={att} unlocked={unlocked} conf={conf} onSaveEntries={d=>sv('sw_ent',d,setEntries)} onSaveAtt={d=>sv('sw_att',d,setAtt)} onSaveSched={d=>sv('sw_sched',d,setSched)} onSaveUnlocked={d=>sv('sw_unlocked',d,setUnlocked)} onSaveConf={d=>sv('sw_conf',d,setConf)} onLog={addLog}/>}
-        {tab==='uren'&&<Uren inst={inst} entries={entries} onSave={d=>sv('sw_ent',d,setEntries)} onLog={addLog}/>}
+        {tab==='uren'&&<Uren inst={inst} entries={entries} sched={sched} onSave={d=>sv('sw_ent',d,setEntries)} onLog={addLog}/>}
         {tab==='maand'&&<Maand inst={inst} entries={entries} paid={paid} sched={sched} att={att} conf={conf} onSavePaid={d=>sv('sw_paid',d,setPaid)} onRefresh={loadAll} onLog={addLog}/>}
         {tab==='notities'&&<Notities sched={sched} att={att} inst={inst} notes={notes} onSaveNotes={d=>sv('sw_notes',d,setNotes)} onLog={addLog}/>}
         {tab==='lsg'&&<Lesgevers inst={inst} onSave={d=>sv('sw_inst',d,setInst)} onLog={addLog}/>}
@@ -578,18 +585,20 @@ function Overzicht({sched,inst,entries,att,unlocked,conf,onSaveEntries,onSaveAtt
   const weekEnd=addDays(week,6)
   useEffect(()=>{if(!curLoc&&weekLocs.length)setLoc(weekLocs[0].locId)},[week,sched]) // locatie bestaat niet in deze versie → eerste kiezen
 
-  const getAtt=(sessId,name,role,duur)=>{
+  // 4e parameter: het effectieve standaarduur (getal, via memberDefH) — een
+  // duur-string ('2u') wordt voor de zekerheid ook nog begrepen.
+  const getAtt=(sessId,name,role,def)=>{
     const mk=`${name}|${role||'lesgever'}`
     const b=att[week]?.[loc]?.[sessId]?.[mk]
-    const defH=parseDuur(duur).toString()
+    const defH=(typeof def==='number'?def:parseDuur(def)).toString()
     if(!b)return{aanwezig:true,sub:'',hours:defH,note:''}
     return{aanwezig:b.aanwezig!==false,sub:b.sub||'',hours:b.hours!==undefined?b.hours:defH,note:b.note||''}
   }
-  const setMA=(sessId,name,role,duur,patch)=>{
+  const setMA=(sessId,name,role,def,patch)=>{
     const mk=`${name}|${role||'lesgever'}`
     const next=JSON.parse(JSON.stringify(att))
     if(!next[week])next[week]={};if(!next[week][loc])next[week][loc]={};if(!next[week][loc][sessId])next[week][loc][sessId]={}
-    next[week][loc][sessId][mk]={...getAtt(sessId,name,role,duur),...patch}
+    next[week][loc][sessId][mk]={...getAtt(sessId,name,role,def),...patch}
     onSaveAtt(next)
   }
   const sessRef=sessId=>`${week}_${loc}_${sessId}`
@@ -605,14 +614,14 @@ function Overzicht({sched,inst,entries,att,unlocked,conf,onSaveEntries,onSaveAtt
     // Validatie: namen die niet in Lesgevers staan zouden anders GELUIDLOOS geen uren krijgen
     const unknown=[]
     sess.members.forEach(m=>{
-      const a=getAtt(sess.id,m.name,m.role,sess.duur)
+      const a=getAtt(sess.id,m.name,m.role,memberDefH(m,sess.duur))
       const h=parseFloat(a.hours||0)
       if(a.aanwezig!==false&&h>0&&!isNaN(h)&&!inst.find(i=>i.name===m.name))unknown.push(`${m.name}${m.role&&m.role!=='lesgever'?' ('+m.role+')':''}`)
       if(a.aanwezig===false&&a.sub&&a.sub.trim()&&h>0&&!isNaN(h)&&!inst.find(i=>i.name===a.sub.trim()))unknown.push(`${a.sub.trim()} (vervanger voor ${m.name})`)
     })
     if(unknown.length&&!window.confirm(`⚠ LET OP — deze namen staan niet in het tabblad Lesgevers en krijgen daarom GÉÉN uren in het maandoverzicht:\n\n• ${[...new Set(unknown)].join('\n• ')}\n\nControleer op typfouten of voeg de persoon eerst toe via Lesgevers.\n\nToch bevestigen ZONDER uren voor deze namen?`))return
     sess.members.forEach(m=>{
-      const a=getAtt(sess.id,m.name,m.role,sess.duur)
+      const a=getAtt(sess.id,m.name,m.role,memberDefH(m,sess.duur))
       const lt=m.role==='lesgever'?sess.type:m.role
       if(a.aanwezig!==false&&parseFloat(a.hours||0)>0&&!isNaN(parseFloat(a.hours))){const f=inst.find(i=>i.name===m.name);if(f)newE.push({id:uid(),instId:f.id,date,loc:locName,lt,hours:parseFloat(a.hours)||0,note:'',_sessRef:ref})}
       else if(!a.aanwezig&&a.sub&&a.sub.trim()&&parseFloat(a.hours||0)>0&&!isNaN(parseFloat(a.hours))){const f=inst.find(i=>i.name===a.sub.trim());if(f)newE.push({id:uid(),instId:f.id,date,loc:locName,lt,hours:parseFloat(a.hours)||0,note:`Vervanger voor ${m.name}`,_sessRef:ref})}
@@ -640,13 +649,57 @@ function Overzicht({sched,inst,entries,att,unlocked,conf,onSaveEntries,onSaveAtt
   // Planningswijziging = nieuwe versie geldig vanaf de geselecteerde week.
   // Eerdere weken behouden de oude planning (en dus de juiste prestaties/uitbetaling).
   const updLoc=u=>onSaveSched(upsertSchedVersion(sched,week,weekLocs.map(l=>l.locId===loc?{...l,...u}:l)))
+
+  // ── Locatiebeheer ──────────────────────────────────────────────────────────
+  // Hernoemen wijzigt ALLEEN de weergavenaam: het locId (de koppelsleutel naar
+  // aanwezigheid, prestaties, refs en notities) blijft voor altijd hetzelfde,
+  // dus niets raakt los. Net als elke planningswijziging geldt het vanaf de
+  // geselecteerde week; voorgaande weken tonen en rekenen met de oude naam.
+  const locSlug=n=>n.toLowerCase().replace(/[^a-z0-9]/g,'') // géén underscores: refs splitsen op '_'
+  const allLocIds=()=>{const s=new Set();(sched?.versions||[]).forEach(v=>(v.locs||[]).forEach(l=>s.add(l.locId)));return s}
+  const renameLoc=()=>{
+    if(!curLoc)return
+    const name=(window.prompt('Nieuwe naam voor deze locatie:',curLoc.name)||'').trim()
+    if(!name)return
+    const stadIn=window.prompt('Stad:',curLoc.stad||'')
+    if(stadIn===null)return
+    const stad=stadIn.trim()
+    if(weekLocs.some(l=>l.locId!==loc&&l.name.toLowerCase()===name.toLowerCase())){alert('⚠ Er bestaat al een locatie met deze naam.');return}
+    if(name===curLoc.name&&stad===(curLoc.stad||''))return
+    onLog('locatie_hernoemd',`Locatie '${curLoc.name}' → '${name}'${stad!==(curLoc.stad||'')?` (stad: ${stad||'—'})`:''} — geldig vanaf week ${fmtShort(week)}; bestaande prestaties en aanwezigheid blijven via het locatie-ID gekoppeld`)
+    updLoc({name,stad})
+  }
+  const addLocation=()=>{
+    const name=(window.prompt('Naam van de nieuwe locatie:')||'').trim()
+    if(!name)return
+    if(weekLocs.some(l=>l.name.toLowerCase()===name.toLowerCase())){alert('⚠ Er bestaat al een locatie met deze naam.');return}
+    const stad=(window.prompt('Stad:')||'').trim()
+    let id=locSlug(name)||'locatie'
+    const used=allLocIds()
+    if(used.has(id)){let n=2;while(used.has(id+n))n++;id=id+n}
+    onLog('locatie_toegevoegd',`Locatie toegevoegd: ${name}${stad?` (${stad})`:''} — geldig vanaf week ${fmtShort(week)}`)
+    onSaveSched(upsertSchedVersion(sched,week,[...weekLocs,{locId:id,name,stad,sessions:[]}]))
+    setLoc(id)
+  }
   const delS=id=>{const s=curLoc.sessions.find(x=>x.id===id);onLog('sessie_verwijderd',`Sessie verwijderd: ${s?.dag} ${LL[s?.type]||s?.type} @ ${curLoc.name} — geldig vanaf week ${fmtShort(week)}`);updLoc({sessions:curLoc.sessions.filter(s=>s.id!==id)})}
   const openEdit=sess=>{setSf({...sess,members:sess.members.map(m=>({...m})),substitutes:[...sess.substitutes]});setEditId(sess.id)}
   const openNew=()=>{setSf({dag:'',type:'kids',duur:'2u',members:[],substitutes:[]});setEditId('new')}
-  const saveSess=()=>{if(!(sf.dag in DAY_IDX)){alert('⚠ Kies eerst een dag voor deze sessie.');return}onLog('sessie_planning',(editId==='new'?`Nieuwe sessie toegevoegd: ${sf.dag} ${LL[sf.type]||sf.type} @ ${curLoc?.name}`:`Sessie bewerkt: ${sf.dag} ${LL[sf.type]||sf.type} @ ${curLoc?.name}`)+` — geldig vanaf week ${fmtShort(week)}`);if(editId==='new'){const newId=`${loc}_${sf.dag}_${sf.type}`.toLowerCase().replace(/[^a-z0-9]/g,'');const idx=curLoc.sessions.filter(s=>s.id.startsWith(newId)).length;updLoc({sessions:[...curLoc.sessions,{...sf,id:idx?`${newId}_${idx+1}`:newId}]})}else updLoc({sessions:curLoc.sessions.map(s=>s.id===editId?sf:s)});setEditId(null);setSf(null);setNm('');setNs('')}
+  const saveSess=()=>{
+    if(!(sf.dag in DAY_IDX)){alert('⚠ Kies eerst een dag voor deze sessie.');return}
+    // Persoonlijke standaarduren normaliseren: geldig getal (0.25–12) → getal, anders veld weg (= sessieduur)
+    const badDH=sf.members.filter(m=>{const s=String(m.defHours??'').trim();if(s==='')return false;const v=parseFloat(s);return isNaN(v)||v<=0||v>12})
+    if(badDH.length&&!window.confirm(`⚠ Ongeldig standaarduur bij: ${badDH.map(m=>m.name).join(', ')} (moet tussen 0,25 en 12 liggen).\n\nOK = opslaan ZONDER persoonlijke standaard voor deze personen (sessieduur geldt) · Annuleren = terug naar het formulier`))return
+    const normMembers=sf.members.map(m=>{const{defHours,...rest}=m;const v=parseFloat(String(defHours??'').trim());return !isNaN(v)&&v>0&&v<=12?{...rest,defHours:v}:rest})
+    const sfN={...sf,members:normMembers}
+    const dhTxt=normMembers.filter(m=>m.defHours!==undefined).map(m=>`${m.name} ${m.defHours}u`).join(', ')
+    onLog('sessie_planning',(editId==='new'?`Nieuwe sessie toegevoegd: ${sfN.dag} ${LL[sfN.type]||sfN.type} @ ${curLoc?.name}`:`Sessie bewerkt: ${sfN.dag} ${LL[sfN.type]||sfN.type} @ ${curLoc?.name}`)+` — geldig vanaf week ${fmtShort(week)}`+(dhTxt?` — persoonlijke standaarduren: ${dhTxt}`:''))
+    if(editId==='new'){const newId=`${loc}_${sfN.dag}_${sfN.type}`.toLowerCase().replace(/[^a-z0-9]/g,'');const idx=curLoc.sessions.filter(s=>s.id.startsWith(newId)).length;updLoc({sessions:[...curLoc.sessions,{...sfN,id:idx?`${newId}_${idx+1}`:newId}]})}else updLoc({sessions:curLoc.sessions.map(s=>s.id===editId?sfN:s)})
+    setEditId(null);setSf(null);setNm('');setNs('')
+  }
   const addM=()=>{const n=nm.trim();if(!n)return;if(!inames.includes(n)&&!window.confirm(`⚠ '${n}' staat niet in het tabblad Lesgevers.\nDeze persoon kan géén uren krijgen tot die daar is toegevoegd.\n\nToch toevoegen aan de planning?`))return;setSf(f=>({...f,members:[...f.members,{name:n,role:'lesgever'}]}));setNm('')}
   const delM=i=>setSf(f=>({...f,members:f.members.filter((_,j)=>j!==i)}))
   const setR=(i,r)=>setSf(f=>({...f,members:f.members.map((m,j)=>j===i?{...m,role:r}:m)}))
+  const setDH=(i,v)=>setSf(f=>({...f,members:f.members.map((m,j)=>j===i?{...m,defHours:v}:m)}))
   const addSb=()=>{const n=ns.trim();if(!n)return;if(!inames.includes(n)&&!window.confirm(`⚠ '${n}' staat niet in het tabblad Lesgevers.\nAls vervanger kan deze persoon géén uren krijgen tot die daar is toegevoegd.\n\nToch toevoegen?`))return;setSf(f=>({...f,substitutes:[...f.substitutes,n]}));setNs('')}
   const delSb=i=>setSf(f=>({...f,substitutes:f.substitutes.filter((_,j)=>j!==i)}))
   const inames=inst.map(i=>i.name).sort()
@@ -666,13 +719,14 @@ function Overzicht({sched,inst,entries,att,unlocked,conf,onSaveEntries,onSaveAtt
         {editMode&&<button onClick={openNew} style={S.btnP}>+ Sessie</button>}
       </div>
     </div>
-    <div style={{display:'flex',gap:6,marginBottom:14,flexWrap:'wrap'}}>{weekLocs.map(l=><button key={l.locId} onClick={()=>setLoc(l.locId)} style={{padding:'6px 12px',borderRadius:8,border:loc===l.locId?'none':'1px solid #e2e8f0',cursor:'pointer',fontSize:13,fontWeight:500,fontFamily:'inherit',background:loc===l.locId?'#0f2133':'#fff',color:loc===l.locId?'#2dd4bf':'#475569'}}>{l.name} <span style={{fontSize:11,opacity:0.5}}>{l.stad}</span></button>)}</div>
+    <div style={{display:'flex',gap:6,marginBottom:14,flexWrap:'wrap'}}>{weekLocs.map(l=><button key={l.locId} onClick={()=>setLoc(l.locId)} style={{padding:'6px 12px',borderRadius:8,border:loc===l.locId?'none':'1px solid #e2e8f0',cursor:'pointer',fontSize:13,fontWeight:500,fontFamily:'inherit',background:loc===l.locId?'#0f2133':'#fff',color:loc===l.locId?'#2dd4bf':'#475569'}}>{l.name} <span style={{fontSize:11,opacity:0.5}}>{l.stad}</span>{editMode&&loc===l.locId&&<span onClick={e=>{e.stopPropagation();renameLoc()}} title="Naam/stad van deze locatie wijzigen (geldig vanaf deze week)" style={{marginLeft:7,cursor:'pointer',fontSize:12}}>✏</span>}</button>)}
+    {editMode&&<button onClick={addLocation} title="Nieuwe locatie toevoegen (geldig vanaf deze week)" style={{padding:'6px 12px',borderRadius:8,border:'1px dashed #94a3b8',cursor:'pointer',fontSize:13,fontWeight:500,fontFamily:'inherit',background:'#f8fafc',color:'#475569'}}>+ Locatie</button>}</div>
     {curLoc&&<div style={{display:'grid',gridTemplateColumns:'repeat(auto-fill,minmax(340px,1fr))',gap:13}}>
       {sorted.map(sess=>{
         const date=getDayDate(week,sess.dag);const tc=TC[sess.type]||['#f3e8ff','#4c1d95']
         const conf=isConf(sess.id)&&!isUnlocked(sess.id)
         const editing=isUnlocked(sess.id)
-        const absCnt=sess.members.filter(m=>getAtt(sess.id,m.name,m.role,sess.duur).aanwezig===false).length
+        const absCnt=sess.members.filter(m=>getAtt(sess.id,m.name,m.role,memberDefH(m,sess.duur)).aanwezig===false).length
         return(<div key={sess.id} style={{background:'#fff',borderRadius:12,border:`1.5px solid ${conf?'#86efac':editing?'#fbbf24':absCnt>0?'#fcd34d':'#e2e8f0'}`,overflow:'hidden'}}>
           <div style={{padding:'9px 13px',display:'flex',justifyContent:'space-between',alignItems:'center',background:conf?'#f0fdf4':editing?'#fffbeb':absCnt>0?'#fffbeb':'#f8fafc',borderBottom:'1px solid #f1f5f9'}}>
             <div style={{display:'flex',alignItems:'center',gap:7,flexWrap:'wrap'}}>
@@ -689,7 +743,7 @@ function Overzicht({sched,inst,entries,att,unlocked,conf,onSaveEntries,onSaveAtt
           {!editMode&&sess.substitutes.length>0&&<div style={{padding:'4px 13px',background:'#fffbeb',borderBottom:'1px solid #fef3c7',fontSize:11,color:'#92400e'}}><b>Vervangers: </b>{sess.substitutes.join(', ')}</div>}
           <div style={{padding:'9px 13px'}}>
             {sess.members.map((m,i)=>{
-              const a=getAtt(sess.id,m.name,m.role,sess.duur);const present=a.aanwezig!==false
+              const a=getAtt(sess.id,m.name,m.role,memberDefH(m,sess.duur));const present=a.aanwezig!==false
               return(<div key={i} style={{marginBottom:7}}>
                 <div style={{display:'flex',alignItems:'center',gap:5,flexWrap:'wrap',marginBottom:present?0:4}}>
                   {m.role!=='lesgever'&&<span style={{fontSize:10,padding:'1px 5px',borderRadius:20,background:RC[m.role]?.[0]||'#f1f5f9',color:RC[m.role]?.[1]||'#334155',fontWeight:600}}>{m.role}</span>}
@@ -705,21 +759,21 @@ function Overzicht({sched,inst,entries,att,unlocked,conf,onSaveEntries,onSaveAtt
                         if(!window.confirm(msg))return
                       }
                       onLog('aanwezig',`${sessLabel} → terug aanwezig${hasSub?' (vervanger '+a.sub+' verwijderd)':''}`)
-                      setMA(sess.id,m.name,m.role,sess.duur,{aanwezig:true,sub:'',note:'',hours:parseDuur(sess.duur).toString()})
+                      setMA(sess.id,m.name,m.role,memberDefH(m,sess.duur),{aanwezig:true,sub:'',note:'',hours:memberDefH(m,sess.duur).toString()})
                     } else {
                       onLog('afwezig',`${sessLabel} → afwezig gemarkeerd`)
-                      setMA(sess.id,m.name,m.role,sess.duur,{aanwezig:false})
+                      setMA(sess.id,m.name,m.role,memberDefH(m,sess.duur),{aanwezig:false})
                     }
                   }} style={{padding:'4px 10px',borderRadius:20,border:'none',cursor:'pointer',fontWeight:600,fontSize:13,fontFamily:'inherit',background:present?'#dbeafe':'#fee2e2',color:present?'#1e3a8a':'#991b1b'}}>{m.name}</button>
                   <div style={{display:'flex',alignItems:'center',gap:3}}>
-                    <input type="number" step="0.25" min="0" max="12" value={a.hours} disabled={conf} title={conf?'Sessie is bevestigd — klik ✏ Wijzigen om uren aan te passen':''} onWheel={e=>e.target.blur()} onChange={e=>setMA(sess.id,m.name,m.role,sess.duur,{hours:e.target.value})} onBlur={e=>{const h=parseFloat(e.target.value);if(!isNaN(h)&&h!==parseDuur(sess.duur))onLog('uren_aangepast',`Uren voor ${m.name} aangepast naar ${h}u op ${sess.dag} ${LL[sess.type]||sess.type} @ ${curLoc.name}`)}} style={{...S.inp,width:50,textAlign:'center',padding:'3px 5px',background:conf?'#f1f5f9':present?'#fff':'#fff8ed',borderColor:present?'#e2e8f0':'#fb923c',opacity:conf?0.6:1,cursor:conf?'not-allowed':'auto'}}/>
+                    <input type="number" step="0.25" min="0" max="12" value={a.hours} disabled={conf} title={conf?'Sessie is bevestigd — klik ✏ Wijzigen om uren aan te passen':(m.defHours?`Persoonlijke standaard: ${memberDefH(m,sess.duur)}u (aanpassen via ⚙ Planning bewerken)`:'')} onWheel={e=>e.target.blur()} onChange={e=>setMA(sess.id,m.name,m.role,memberDefH(m,sess.duur),{hours:e.target.value})} onBlur={e=>{const h=parseFloat(e.target.value);if(!isNaN(h)&&h!==memberDefH(m,sess.duur))onLog('uren_aangepast',`Uren voor ${m.name} aangepast naar ${h}u op ${sess.dag} ${LL[sess.type]||sess.type} @ ${curLoc.name}`)}} style={{...S.inp,width:50,textAlign:'center',padding:'3px 5px',background:conf?'#f1f5f9':present?'#fff':'#fff8ed',borderColor:present?'#e2e8f0':'#fb923c',opacity:conf?0.6:1,cursor:conf?'not-allowed':'auto'}}/>
                     <span style={{fontSize:11,color:'#94a3b8'}}>u</span>
                   </div>
-                  {!present&&<input list={`sl-${sess.id}-${i}`} placeholder="Vervanger..." value={a.sub} disabled={conf} title={conf?'Sessie is bevestigd — klik ✏ Wijzigen om aan te passen':a.sub&&!inames.includes(a.sub.trim())?'⚠ Deze naam staat niet in Lesgevers — er kunnen geen uren voor aangemaakt worden':''} onChange={e=>setMA(sess.id,m.name,m.role,sess.duur,{sub:e.target.value})} onBlur={e=>{if(e.target.value.trim())onLog('vervanger_ingevuld',`Vervanger '${e.target.value.trim()}' ingevuld voor ${m.name}${m.role!=='lesgever'?' ('+m.role+')':''} op ${sess.dag} ${LL[sess.type]||sess.type} @ ${curLoc.name} (${fmtShort(getDayDate(week,sess.dag))})`)}} style={{...S.inp,width:145,background:a.sub&&!inames.includes(a.sub.trim())?'#fef2f2':'#fff8ed',borderColor:a.sub?(inames.includes(a.sub.trim())?'#22c55e':'#dc2626'):'#fb923c',color:a.sub&&!inames.includes(a.sub.trim())?'#991b1b':'#92400e',padding:'3px 8px',opacity:conf?0.6:1,cursor:conf?'not-allowed':'auto'}}/>}
+                  {!present&&<input list={`sl-${sess.id}-${i}`} placeholder="Vervanger..." value={a.sub} disabled={conf} title={conf?'Sessie is bevestigd — klik ✏ Wijzigen om aan te passen':a.sub&&!inames.includes(a.sub.trim())?'⚠ Deze naam staat niet in Lesgevers — er kunnen geen uren voor aangemaakt worden':''} onChange={e=>setMA(sess.id,m.name,m.role,memberDefH(m,sess.duur),{sub:e.target.value})} onBlur={e=>{if(e.target.value.trim())onLog('vervanger_ingevuld',`Vervanger '${e.target.value.trim()}' ingevuld voor ${m.name}${m.role!=='lesgever'?' ('+m.role+')':''} op ${sess.dag} ${LL[sess.type]||sess.type} @ ${curLoc.name} (${fmtShort(getDayDate(week,sess.dag))})`)}} style={{...S.inp,width:145,background:a.sub&&!inames.includes(a.sub.trim())?'#fef2f2':'#fff8ed',borderColor:a.sub?(inames.includes(a.sub.trim())?'#22c55e':'#dc2626'):'#fb923c',color:a.sub&&!inames.includes(a.sub.trim())?'#991b1b':'#92400e',padding:'3px 8px',opacity:conf?0.6:1,cursor:conf?'not-allowed':'auto'}}/>}
                   <datalist id={`sl-${sess.id}-${i}`}>{sess.substitutes.map(s=><option key={s} value={s}/>)}{inames.map(n=><option key={n} value={n}/>)}</datalist>
                 </div>
                 {!present&&<div style={{marginLeft:4,marginTop:4}}>
-                  <input placeholder="Notitie voor vervanger (optioneel)..." value={a.note} disabled={conf} title={conf?'Sessie is bevestigd — klik ✏ Wijzigen om aan te passen':''} onChange={e=>setMA(sess.id,m.name,m.role,sess.duur,{note:e.target.value})} onBlur={e=>{if(e.target.value.trim())onLog('notitie_vervanging',`Notitie toegevoegd voor ${m.name} op ${sess.dag} ${LL[sess.type]||sess.type} @ ${curLoc.name}: "${e.target.value.trim()}"`)}} style={{...S.inp,width:'100%',padding:'4px 9px',fontSize:12,background:'#f8fafc',borderColor:'#e2e8f0',opacity:conf?0.6:1,cursor:conf?'not-allowed':'auto'}}/>
+                  <input placeholder="Notitie voor vervanger (optioneel)..." value={a.note} disabled={conf} title={conf?'Sessie is bevestigd — klik ✏ Wijzigen om aan te passen':''} onChange={e=>setMA(sess.id,m.name,m.role,memberDefH(m,sess.duur),{note:e.target.value})} onBlur={e=>{if(e.target.value.trim())onLog('notitie_vervanging',`Notitie toegevoegd voor ${m.name} op ${sess.dag} ${LL[sess.type]||sess.type} @ ${curLoc.name}: "${e.target.value.trim()}"`)}} style={{...S.inp,width:'100%',padding:'4px 9px',fontSize:12,background:'#f8fafc',borderColor:'#e2e8f0',opacity:conf?0.6:1,cursor:conf?'not-allowed':'auto'}}/>
                 </div>}
               </div>)
             })}
@@ -744,7 +798,8 @@ function Overzicht({sched,inst,entries,att,unlocked,conf,onSaveEntries,onSaveAtt
           <div><label style={S.lbl}>Duur</label><input value={sf.duur} onChange={e=>setSf(f=>({...f,duur:e.target.value}))} style={{...S.inp,width:'100%'}} placeholder="2u"/></div>
         </div>
         <label style={{...S.lbl,marginBottom:7}}>Lesgevers</label>
-        {sf.members.map((m,i)=><div key={i} style={{display:'flex',gap:7,marginBottom:5,alignItems:'center'}}><span style={{flex:1,fontSize:13}}>{m.name}</span><select value={m.role} onChange={e=>setR(i,e.target.value)} style={{...S.inp,width:'auto'}}>{ROLES.map(r=><option key={r}>{r}</option>)}</select><button onClick={()=>delM(i)} style={{...S.btnSm,background:'#fee2e2',color:'#dc2626'}}>×</button></div>)}
+        {sf.members.length>0&&<div style={{fontSize:10.5,color:'#94a3b8',marginBottom:4}}>Uren-kolom = structureel standaarduur per persoon (leeg = sessieduur, {parseDuur(sf.duur)}u) — geldt vanaf deze week en voor de toekomst</div>}
+        {sf.members.map((m,i)=><div key={i} style={{display:'flex',gap:7,marginBottom:5,alignItems:'center'}}><span style={{flex:1,fontSize:13}}>{m.name}</span><input type="number" step="0.25" min="0.25" max="12" placeholder={parseDuur(sf.duur).toString()} value={m.defHours??''} onWheel={e=>e.target.blur()} onChange={e=>setDH(i,e.target.value)} title="Structureel standaarduur voor deze persoon. Leeg laten = sessieduur. Geldt vanaf de geselecteerde week en voor alle toekomstige weken." style={{...S.inp,width:54,textAlign:'center',padding:'4px 5px',background:(m.defHours!==undefined&&m.defHours!=='')?'#ecfeff':'#fff',borderColor:(m.defHours!==undefined&&m.defHours!=='')?'#67e8f9':'#e2e8f0'}}/><span style={{fontSize:11,color:'#64748b'}}>u</span><select value={m.role} onChange={e=>setR(i,e.target.value)} style={{...S.inp,width:'auto'}}>{ROLES.map(r=><option key={r}>{r}</option>)}</select><button onClick={()=>delM(i)} style={{...S.btnSm,background:'#fee2e2',color:'#dc2626'}}>×</button></div>)}
         <div style={{display:'flex',gap:7,marginBottom:13,marginTop:7}}><input list="il" value={nm} onChange={e=>setNm(e.target.value)} onKeyDown={e=>{if(e.key==='Enter')addM()}} placeholder="Lesgever toevoegen..." style={{...S.inp,flex:1}}/><datalist id="il">{inames.map(n=><option key={n} value={n}/>)}</datalist><button onClick={addM} style={S.btnP}>+</button></div>
         <label style={{...S.lbl,marginBottom:7}}>Vervangers</label>
         <div style={{display:'flex',flexWrap:'wrap',gap:5,marginBottom:7}}>{sf.substitutes.map((s,i)=><span key={i} style={{display:'flex',alignItems:'center',gap:3,padding:'3px 9px',borderRadius:20,fontSize:12,background:'#fef9c3',color:'#713f12',border:'1px dashed #fbbf24'}}>{s}<button onClick={()=>delSb(i)} style={{background:'none',border:'none',cursor:'pointer',color:'#92400e',fontSize:12,padding:0,marginLeft:2}}>×</button></span>)}</div>
@@ -756,11 +811,11 @@ function Overzicht({sched,inst,entries,att,unlocked,conf,onSaveEntries,onSaveAtt
 }
 
 // ─── UREN INVOEREN ────────────────────────────────────────────────────────────
-function Uren({inst,entries,onSave,onLog}){
+function Uren({inst,entries,sched,onSave,onLog}){
   const today=new Date().toISOString().split('T')[0]
   const[f,setF]=useState({instId:'',date:today,loc:'',lt:'kids',hours:'',note:''})
   const[ok,setOk]=useState(false);const[fm,setFm]=useState(today.slice(0,7));const[del,setDel]=useState(null)
-  const locs=['De Nachtegaal','Den Bessem','Sorghvliedt','Plantin Moretus','Groot Schijn','De Schinde','Swimcube LO','Andere']
+  const locs=[...latestLocs(sched).map(l=>l.name),'Andere'] // live uit de planning: nieuwe/hernoemde locaties verschijnen hier automatisch
   const sorted=[...inst].sort((a,b)=>a.name.localeCompare(b.name))
   const gi=id=>inst.find(i=>i.id===id)
   const amt=e=>{const i=gi(e.instId);return i?(i.rates[e.lt]||0)*e.hours:0}
@@ -922,7 +977,7 @@ function Maand({inst,entries,paid,sched,att,conf,onSavePaid,onRefresh,onLog}){
         sess.members.forEach(m=>{
           const mk=`${m.name}|${m.role||'lesgever'}`
           const b=cAtt[wk]?.[locObj.locId]?.[sess.id]?.[mk]
-          const defH=parseDuur(sess.duur).toString()
+          const defH=memberDefH(m,sess.duur).toString()
           const aanwezig=b?b.aanwezig!==false:true
           const sub=(b?.sub||'').trim()
           const hours=b&&b.hours!==undefined?b.hours:defH
