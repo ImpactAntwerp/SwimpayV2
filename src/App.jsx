@@ -11,11 +11,22 @@ const DAY_IDX={Maandag:0,Dinsdag:1,Woensdag:2,Donderdag:3,Vrijdag:4,Zaterdag:5,Z
 
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,7)}
 function euro(n){const v=parseFloat(n||0);return'€ '+(isNaN(v)?'0,00':v.toFixed(2).replace('.',','))}
-function getMon(d){const dt=new Date(d),day=dt.getDay(),diff=dt.getDate()-day+(day===0?-6:1);dt.setDate(diff);return dt.toISOString().split('T')[0]}
-function addDays(ds,n){const d=new Date(ds);d.setDate(d.getDate()+n);return d.toISOString().split('T')[0]}
+// ─── Datums ────────────────────────────────────────────────────────────────────
+// Alle datumrekenwerk gebeurt in UTC op pure kalenderdatums ('YYYY-MM-DD').
+// Vroeger rekende dit in de LOKALE tijd van de computer: bij elke overgang tussen
+// zomer- en wintertijd verschoof een week daardoor naar de zondag ervoor (bv.
+// '2026-10-18' i.p.v. '2026-10-19'), waardoor aanwezigheden en prestaties van
+// vorige weken onvindbaar werden en nieuwe onder een verkeerde week/datum belandden.
+function _utc(ds){const[y,m,d]=String(ds).slice(0,10).split('-').map(Number);return new Date(Date.UTC(y,m-1,d))}
+function _ymd(dt){return dt.toISOString().slice(0,10)}
+// Datum van vandaag volgens de klok van de gebruiker (niet in UTC: anders is het
+// in België tussen middernacht en 1u/2u nog "gisteren").
+function todayStr(){const t=new Date();return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,'0')}-${String(t.getDate()).padStart(2,'0')}`}
+function getMon(d){const dt=_utc(d),day=dt.getUTCDay();dt.setUTCDate(dt.getUTCDate()-day+(day===0?-6:1));return _ymd(dt)}
+function addDays(ds,n){const d=_utc(ds);d.setUTCDate(d.getUTCDate()+n);return _ymd(d)}
 function getDayDate(mon,dag){return addDays(mon,DAY_IDX[dag]||0)}
-function fmtShort(ds){return new Date(ds).toLocaleDateString('nl-BE',{day:'numeric',month:'short'})}
-function fmtDate(ds){return new Date(ds).toLocaleDateString('nl-BE',{day:'numeric',month:'long',year:'numeric'})}
+function fmtShort(ds){return _utc(ds).toLocaleDateString('nl-BE',{day:'numeric',month:'short',timeZone:'UTC'})}
+function fmtDate(ds){return _utc(ds).toLocaleDateString('nl-BE',{day:'numeric',month:'long',year:'numeric',timeZone:'UTC'})}
 function parseDuur(s){if(!s)return 2;const m=s.match(/(\d+)u(\d+)?/);if(!m)return 2;return parseInt(m[1])+(m[2]?parseInt(m[2])/60:0)}
 // Structureel standaarduur per persoon binnen een sessie (uit het planningssjabloon).
 // Ingevuld en geldig → dat aantal uren; anders de sessieduur. Dit veld leeft op het
@@ -660,9 +671,9 @@ function Dashboard({sched,att,inst,comm,entries,unlocked,conf,onSaveComm,onSaveA
 
 // ─── OVERZICHT LESSEN ────────────────────────────────────────────────────────
 function Overzicht({sched,inst,entries,att,unlocked,conf,onSaveEntries,onSaveAtt,onSaveSched,onSaveUnlocked,onSaveConf,onLog}){
-  const thisMonday=getMon(new Date().toISOString().split('T')[0])
+  const thisMonday=getMon(todayStr())
   const[week,setWeek]=useState(thisMonday)
-  const[loc,setLoc]=useState(()=>schedFor(sched,getMon(new Date().toISOString().split('T')[0]))[0]?.locId||'')
+  const[loc,setLoc]=useState(()=>schedFor(sched,getMon(todayStr()))[0]?.locId||'')
   const[editMode,setEditMode]=useState(false)
   const[editId,setEditId]=useState(null)
   const[sf,setSf]=useState(null)
@@ -798,7 +809,7 @@ function Overzicht({sched,inst,entries,att,unlocked,conf,onSaveEntries,onSaveAtt
     <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:14,flexWrap:'wrap'}}>
       <div style={{display:'flex',alignItems:'center',gap:6,background:'#fff',border:'1px solid #e2e8f0',borderRadius:10,padding:'7px 12px'}}>
         <button onClick={()=>setWeek(addDays(week,-7))} style={{...S.btnSm,fontSize:16,padding:'2px 9px'}}>‹</button>
-        <div style={{textAlign:'center',minWidth:165}}><div style={{fontSize:13,fontWeight:700,color:'#0f172a'}}>Week {fmtShort(week)} – {fmtShort(weekEnd)}</div><div style={{fontSize:11,color:'#94a3b8'}}>{new Date(week).getFullYear()}</div></div>
+        <div style={{textAlign:'center',minWidth:165}}><div style={{fontSize:13,fontWeight:700,color:'#0f172a'}}>Week {fmtShort(week)} – {fmtShort(weekEnd)}</div><div style={{fontSize:11,color:'#94a3b8'}}>{week.slice(0,4)}</div></div>
         <button onClick={()=>setWeek(addDays(week,7))} style={{...S.btnSm,fontSize:16,padding:'2px 9px'}}>›</button>
         <button onClick={()=>setWeek(thisMonday)} style={{...S.btnSm,marginLeft:2,background:week===thisMonday?'#0f2133':'#f1f5f9',color:week===thisMonday?'#2dd4bf':'#475569',fontSize:11}}>Nu</button>
       </div>
@@ -900,7 +911,7 @@ function Overzicht({sched,inst,entries,att,unlocked,conf,onSaveEntries,onSaveAtt
 
 // ─── UREN INVOEREN ────────────────────────────────────────────────────────────
 function Uren({inst,entries,sched,onSave,onLog}){
-  const today=new Date().toISOString().split('T')[0]
+  const today=todayStr()
   const[f,setF]=useState({instId:'',date:today,loc:'',lt:'kids',hours:'',note:''})
   const[ok,setOk]=useState(false);const[fm,setFm]=useState(today.slice(0,7));const[del,setDel]=useState(null)
   const locs=[...latestLocs(sched).map(l=>l.name),'Andere'] // live uit de planning: nieuwe/hernoemde locaties verschijnen hier automatisch
@@ -1295,7 +1306,7 @@ function Notities({sched,att,inst,notes,onSaveNotes,onLog}){
     if(!form.text.trim())return
     const locName=latestLocs(sched).find(l=>l.locId===form.locId)?.name||'Algemeen'
     onLog('notitie_toegevoegd',`Manuele notitie toegevoegd${form.instName?' voor '+form.instName:''} @ ${locName||'Algemeen'}`)
-    onSaveNotes([...notes,{id:uid(),locId:form.locId,locName,instName:form.instName,text:form.text.trim(),date:new Date().toISOString().split('T')[0],fromSub:false}])
+    onSaveNotes([...notes,{id:uid(),locId:form.locId,locName,instName:form.instName,text:form.text.trim(),date:todayStr(),fromSub:false}])
     setForm({locId:'',instName:'',text:''})
   }
 
