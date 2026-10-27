@@ -245,7 +245,15 @@ const _selfWrites={}   // key -> [{s: exacte JSON-string die we schreven, t: tij
 const _pending={}      // key -> {data, timer} — gebufferde write die nog moet vertrekken
 const _recordSelf=(k,d)=>{const now=Date.now();(_selfWrites[k]=_selfWrites[k]||[]).push({s:JSON.stringify(d),t:now});_selfWrites[k]=_selfWrites[k].filter(x=>now-x.t<20000)}
 const _isSelfEcho=(k,valueString)=>(_selfWrites[k]||[]).some(x=>x.s===valueString)
-const _flushKey=k=>{const p=_pending[k];if(!p)return Promise.resolve();clearTimeout(p.timer);delete _pending[k];_recordSelf(k,p.data);return dbSet(k,p.data)}
+// Veiligheidsslot: zolang de gegevens niet minstens één keer VOLLEDIG en foutloos
+// uit de database geladen zijn, schrijft de app NIETS weg. Anders kon een mislukte
+// lading (traag netwerk, geblokkeerde verbinding) de echte data overschrijven met
+// de ingebouwde standaardwaarden.
+let _canWrite=false
+let _onSaveError=null  // door App gezet: toont een melding als opslaan mislukt
+const _KEY_LABEL={sw_log:'logboek',sw_sched:'planning',sw_att:'aanwezigheden/uren',sw_ent:'prestaties',sw_inst:'lesgevers',sw_comm:'communicatie',sw_notes:'notities',sw_paid:'betalingen',sw_unlocked:'ontgrendelde sessies',sw_conf:'bevestigde sessies'}
+const _reportSaveError=(k,e)=>{console.error('Opslaan mislukt:',k,e);if(_onSaveError)_onSaveError({what:_KEY_LABEL[k]||k,msg:e?.message||String(e)})}
+const _flushKey=k=>{const p=_pending[k];if(!p)return Promise.resolve();clearTimeout(p.timer);delete _pending[k];if(!_canWrite)return Promise.resolve();_recordSelf(k,p.data);return dbSet(k,p.data).catch(e=>_reportSaveError(k,e))}
 const _flushAll=()=>{Object.keys(_pending).forEach(k=>_flushKey(k))}
 const DEBOUNCED_KEYS=['sw_att'] // alleen de "typ-intensieve" data bufferen; klikken blijven direct
 
@@ -271,26 +279,58 @@ export default function App(){
   const [username,setUsername]=useState('')
   const [nameInput,setNameInput]=useState('')
   const [conf,setConf]=useState([])
+  const [loadState,setLoadState]=useState('loading') // 'loading' | 'ok' | 'error'
+  const [loadErr,setLoadErr]=useState('')
+  const [saveErr,setSaveErr]=useState('')
 
-  const loadAll=async()=>{
+  // initial=true → eerste lading (of 'Opnieuw proberen'): bij een fout tonen we het foutscherm.
+  // Anders (verversen vanuit Maandoverzicht) → de fout wordt doorgegeven aan de oproeper,
+  // die al een melding toont; de bestaande gegevens op het scherm blijven staan.
+  const loadAll=async(opts)=>{
+    const initial=opts?.initial===true
     setSyncing(true)
-    const[i,e,sc,a,c,n,p,u]=await Promise.all([dbGet('sw_inst'),dbGet('sw_ent'),dbGet('sw_sched'),dbGet('sw_att'),dbGet('sw_comm'),dbGet('sw_notes'),dbGet('sw_paid'),dbGet('sw_unlocked')])
-    if(i)setInst(migrateInst(i))
-    if(e)setEntries(e)
-    if(sc){const m=migrateSchedData(sc);setSched(m);if(Array.isArray(sc)){_recordSelf('sw_sched',m);await dbSet('sw_sched',m)}}else{const ss=mkSchedVersions(addStableIds(SCHED));setSched(ss);_recordSelf('sw_sched',ss);await dbSet('sw_sched',ss)}
-    if(a)setAtt(a);if(c)setComm(c);if(n)setNotes(n);if(p)setPaid(p);if(u)setUnlocked(u)
-      const lg=await dbGet('sw_log');if(lg)setLog(lg)
-      const cf=await dbGet('sw_conf');if(cf)setConf(cf)
-    setSyncing(false);setLastSync(new Date())
+    if(initial){setLoadState('loading');setLoadErr('')}
+    try{
+      const[i,e,sc,a,c,n,p,u,lg,cf]=await Promise.all([dbGet('sw_inst'),dbGet('sw_ent'),dbGet('sw_sched'),dbGet('sw_att'),dbGet('sw_comm'),dbGet('sw_notes'),dbGet('sw_paid'),dbGet('sw_unlocked'),dbGet('sw_log'),dbGet('sw_conf')])
+      // Planning ontbreekt terwijl er wél andere gegevens zijn → verdacht (bv. rij onzichtbaar
+      // door rechten). Dan NIET stilletjes de standaardplanning aanmaken.
+      const freshDb=!sc&&!i&&!e
+      if(!sc&&!freshDb)throw new Error('De planning ontbreekt in de database terwijl er wel andere gegevens zijn. Uit voorzorg wordt niets aangemaakt of overschreven.')
+      // Pas hier is ALLES foutloos binnen → nu pas de schermgegevens vervangen.
+      if(i)setInst(migrateInst(i))
+      if(e)setEntries(e)
+      if(a&&!_pending.sw_att)setAtt(a) // niet over een getypte wijziging heen die nog moet vertrekken
+      if(c)setComm(c);if(n)setNotes(n);if(p)setPaid(p);if(u)setUnlocked(u)
+      if(lg)setLog(lg)
+      if(cf)setConf(cf)
+      let schedWrite=null
+      if(sc){const m=migrateSchedData(sc);setSched(m);if(Array.isArray(sc))schedWrite=m}
+      else{const ss=mkSchedVersions(addStableIds(SCHED));setSched(ss);schedWrite=ss} // gloednieuwe database
+      _canWrite=true
+      setLastSync(new Date())
+      setLoadState('ok')
+      // Planning omzetten naar het nieuwe formaat / aanmaken: lukt dat niet, dan is dat een
+      // opslagfout (rode melding), geen laadfout — de gegevens zijn immers wel goed geladen.
+      if(schedWrite){_recordSelf('sw_sched',schedWrite);dbSet('sw_sched',schedWrite).catch(err=>_reportSaveError('sw_sched',err))}
+    }catch(err){
+      console.error('Laden mislukt:',err)
+      if(initial||!_canWrite){setLoadErr(err?.message||String(err));setLoadState('error')}
+      else throw err
+    }finally{
+      setSyncing(false)
+    }
   }
 
   useEffect(()=>{
+    _onSaveError=msg=>setSaveErr(msg)
     try{const u=localStorage.getItem('sw_username');if(u)setUsername(u)}catch{}
-    loadAll()
+    loadAll({initial:true})
+    if(!supabase)return()=>{_onSaveError=null}
     const channel=supabase.channel('swimpay-rt').on('postgres_changes',{event:'UPDATE',schema:'public',table:'app_data'},({new:row})=>{
+      if(!_canWrite)return // eerste lading nog niet (goed) gebeurd — die haalt sowieso de nieuwste versie op
       if(_isSelfEcho(row.id,row.value))return // onze eigen schrijfactie die terugkaatst — negeren, anders springen velden terug
       if(_pending[row.id])return // we zijn zelf aan het typen op deze key; onze write vertrekt zo en overschrijft dit toch (last-write-wins)
-      const v=JSON.parse(row.value)
+      let v;try{v=JSON.parse(row.value)}catch{console.error('Ongeldige realtime-data voor',row.id);return}
       if(row.id==='sw_inst')setInst(migrateInst(v))
       else if(row.id==='sw_ent')setEntries(v)
       else if(row.id==='sw_sched')setSched(migrateSchedData(v))
@@ -307,30 +347,37 @@ export default function App(){
     const flushOnHide=()=>{if(document.visibilityState==='hidden')_flushAll()}
     document.addEventListener('visibilitychange',flushOnHide)
     window.addEventListener('beforeunload',_flushAll)
-    return()=>{supabase.removeChannel(channel);document.removeEventListener('visibilitychange',flushOnHide);window.removeEventListener('beforeunload',_flushAll);_flushAll()}
+    return()=>{supabase.removeChannel(channel);document.removeEventListener('visibilitychange',flushOnHide);window.removeEventListener('beforeunload',_flushAll);_flushAll();_onSaveError=null}
   },[])
 
   // Lokale state wordt ALTIJD meteen bijgewerkt (geen typvertraging).
   // sw_att (urenvelden e.d.) gaat gebufferd naar Supabase; al de rest direct.
+  // Lukt het opslaan niet, dan verschijnt bovenaan een rode melding.
   const sv=async(k,d,fn)=>{
+    if(!_canWrite){alert('⚠ De gegevens zijn nog niet (correct) geladen — er kan nog niets opgeslagen worden.');return}
     fn(d)
     if(DEBOUNCED_KEYS.includes(k)){
       if(_pending[k])clearTimeout(_pending[k].timer)
       _pending[k]={data:d,timer:setTimeout(()=>_flushKey(k),600)}
     }else{
       _recordSelf(k,d)
-      await dbSet(k,d)
+      try{await dbSet(k,d)}catch(e){_reportSaveError(k,e)}
     }
   }
 
+  // Logboek: altijd eerst de actuele versie ophalen. Lukt dat niet, dan schrijven we
+  // NIET (anders zou het volledige logboek vervangen worden door één regel).
   const addLog=async(action,description)=>{
+    if(!_canWrite)return
     let user='Onbekend';try{user=localStorage.getItem('sw_username')||'Onbekend'}catch{}
     const entry={id:uid(),timestamp:new Date().toISOString(),user,action,description}
-    const current=await dbGet('sw_log')||[]
-    const newLog=[entry,...current].slice(0,2000)
-    setLog(newLog)
-    _recordSelf('sw_log',newLog)
-    await dbSet('sw_log',newLog)
+    try{
+      const current=await dbGet('sw_log')||[]
+      const newLog=[entry,...current].slice(0,2000)
+      setLog(newLog)
+      _recordSelf('sw_log',newLog)
+      await dbSet('sw_log',newLog)
+    }catch(e){_reportSaveError('sw_log',e)}
   }
 
   const confirmName=()=>{
@@ -353,11 +400,20 @@ export default function App(){
           {lastSync&&!syncing&&<span style={{fontSize:11,color:'rgba(255,255,255,0.3)'}}>✓ {lastSync.toLocaleTimeString('nl-BE',{hour:'2-digit',minute:'2-digit'})}</span>}
         </div>
       </header>
-      <main style={{padding:'22px 26px',maxWidth:1200,margin:'0 auto'}}>
+      {saveErr&&loadState==='ok'&&<div role="alert" style={{background:'#fef2f2',borderBottom:'2px solid #dc2626',color:'#991b1b',padding:'10px 26px',fontSize:13,display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+        <b>⚠ Opslaan mislukt ({saveErr.what}) — je laatste wijziging hieraan staat mogelijk NIET in de database.</b>
+        <span style={{fontSize:12,opacity:0.85}}>{saveErr.msg}</span>
+        <span style={{marginLeft:'auto',display:'flex',gap:8}}>
+          <button onClick={()=>window.location.reload()} style={{...S.btnSm,background:'#dc2626',color:'#fff'}}>Pagina herladen</button>
+          <button onClick={()=>setSaveErr('')} style={{...S.btnSm,background:'#fff',color:'#991b1b',border:'1px solid #fca5a5'}}>Sluiten</button>
+        </span>
+      </div>}
+      {loadState!=='ok'&&<LoadScreen state={loadState} error={loadErr} onRetry={()=>loadAll({initial:true})}/>}
+      {loadState==='ok'&&<main style={{padding:'22px 26px',maxWidth:1200,margin:'0 auto'}}>
         {tab==='dashboard'&&<Dashboard sched={sched} att={att} inst={inst} comm={comm} entries={entries} unlocked={unlocked} conf={conf} onSaveComm={d=>sv('sw_comm',d,setComm)} onSaveAtt={d=>sv('sw_att',d,setAtt)} onSaveUnlocked={d=>sv('sw_unlocked',d,setUnlocked)} onSaveConf={d=>sv('sw_conf',d,setConf)} onLog={addLog}/>}
         {tab==='overzicht'&&<Overzicht sched={sched} inst={inst} entries={entries} att={att} unlocked={unlocked} conf={conf} onSaveEntries={d=>sv('sw_ent',d,setEntries)} onSaveAtt={d=>sv('sw_att',d,setAtt)} onSaveSched={d=>sv('sw_sched',d,setSched)} onSaveUnlocked={d=>sv('sw_unlocked',d,setUnlocked)} onSaveConf={d=>sv('sw_conf',d,setConf)} onLog={addLog}/>}
         {tab==='uren'&&<Uren inst={inst} entries={entries} sched={sched} onSave={d=>sv('sw_ent',d,setEntries)} onLog={addLog}/>}
-        {tab==='maand'&&<Maand inst={inst} entries={entries} paid={paid} sched={sched} att={att} conf={conf} onSavePaid={d=>sv('sw_paid',d,setPaid)} onRefresh={loadAll} onLog={addLog}/>}
+        {tab==='maand'&&<Maand inst={inst} entries={entries} paid={paid} sched={sched} att={att} conf={conf} onSavePaid={d=>sv('sw_paid',d,setPaid)} onRefresh={()=>loadAll()} onApplied={({entries:e,conf:c})=>{if(e)setEntries(e);if(c)setConf(c)}} onLog={addLog}/>}
         {tab==='notities'&&<Notities sched={sched} att={att} inst={inst} notes={notes} onSaveNotes={d=>sv('sw_notes',d,setNotes)} onLog={addLog}/>}
         {tab==='lsg'&&<Lesgevers inst={inst} onSave={d=>sv('sw_inst',d,setInst)} onLog={addLog}/>}
         {tab==='logboek'&&<Logboek log={log} username={username} onChangeUser={()=>{try{localStorage.removeItem('sw_username')}catch{};setUsername('');setNameInput('')}}/>}
@@ -374,7 +430,39 @@ export default function App(){
           </div>
         </div>
       )}
-      </main>
+      </main>}
+    </div>
+  )
+}
+
+// Laad-/foutscherm: zolang de gegevens niet volledig binnen zijn, tonen we geen
+// (verouderde) standaardgegevens meer. Bij een fout ziet de gebruiker wat er mis
+// is, met een knop om opnieuw te proberen en technische details om door te sturen.
+function LoadScreen({state,error,onRetry}){
+  const[slow,setSlow]=useState(false)
+  const[copied,setCopied]=useState(false)
+  useEffect(()=>{if(state!=='loading'){setSlow(false);return}const t=setTimeout(()=>setSlow(true),8000);return()=>clearTimeout(t)},[state])
+  const details=`SwimPay laadfout\nTijd: ${new Date().toLocaleString('nl-BE')}\nFout: ${error||'—'}\nBrowser: ${navigator.userAgent}\nOnline: ${navigator.onLine?'ja':'nee'}`
+  const copy=async()=>{try{await navigator.clipboard.writeText(details);setCopied(true);setTimeout(()=>setCopied(false),2000)}catch{window.prompt('Kopieer deze tekst:',details)}}
+  if(state==='loading')return(
+    <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:'90px 20px',color:'#475569',textAlign:'center'}}>
+      <div style={{fontSize:34,marginBottom:12}}>🏊</div>
+      <div style={{fontSize:15,fontWeight:600}}>Gegevens laden…</div>
+      {slow&&<div style={{fontSize:12,color:'#94a3b8',marginTop:8,maxWidth:380}}>Dit duurt langer dan normaal. Na 45 seconden zonder antwoord krijg je een foutmelding met meer uitleg.</div>}
+    </div>
+  )
+  return(
+    <div style={{maxWidth:560,margin:'60px auto',padding:'0 20px'}}>
+      <div style={{background:'#fff',border:'1.5px solid #fca5a5',borderRadius:14,padding:26}}>
+        <div style={{fontSize:30,marginBottom:8}}>⚠️</div>
+        <h2 style={{fontSize:19,fontWeight:700,color:'#0f172a',margin:'0 0 6px'}}>De gegevens konden niet geladen worden</h2>
+        <p style={{fontSize:13,color:'#475569',margin:'0 0 14px',lineHeight:1.5}}>Er is <b>niets gewijzigd</b> in de database. Meestal komt dit door de internetverbinding, een adblocker of een (werk/school)netwerk dat de database tegenhoudt.</p>
+        <div style={{fontSize:12,background:'#fef2f2',color:'#991b1b',borderRadius:8,padding:'9px 11px',marginBottom:16,wordBreak:'break-word'}}>{error||'Onbekende fout'}</div>
+        <div style={{display:'flex',gap:8,flexWrap:'wrap'}}>
+          <button onClick={onRetry} style={{...S.btnP,padding:'9px 16px'}}>Opnieuw proberen</button>
+          <button onClick={copy} style={{...S.btnSm,padding:'9px 14px',background:'#f1f5f9',color:'#334155'}}>{copied?'✓ Gekopieerd':'Foutmelding kopiëren'}</button>
+        </div>
+      </div>
     </div>
   )
 }
@@ -859,10 +947,14 @@ function Uren({inst,entries,sched,onSave,onLog}){
 }
 
 // ─── MAANDOVERZICHT ───────────────────────────────────────────────────────────
-function Maand({inst,entries,paid,sched,att,conf,onSavePaid,onRefresh,onLog}){
+function Maand({inst,entries,paid,sched,att,conf,onSavePaid,onRefresh,onApplied,onLog}){
   const now=new Date();const[mo,setMo]=useState(now.getMonth());const[yr,setYr]=useState(now.getFullYear());const[expanded,setExpanded]=useState({})
   const[herberekend,setHerberekend]=useState(false)
   const[busy,setBusy]=useState(false)
+  // Verversen na een geslaagde schrijfactie: mislukt dat, dan is de wijziging WEL bewaard
+  // (en al in het scherm verwerkt via onApplied) — enkel een melding, geen "niets gewijzigd".
+  const safeRefresh=async()=>{try{await onRefresh()}catch(e){console.error('Verversen mislukt:',e);alert('ℹ De wijziging is opgeslagen, maar de gegevens konden daarna niet ververst worden. Herlaad de pagina om zeker de nieuwste versie te zien.\n\n('+(e?.message||e)+')')}}
+  const failMsg=(what,err,wrote)=>`⚠ ${what} mislukt: ${err?.message||err}\n`+(wrote?'Let op: een deel van de wijziging is mogelijk al opgeslagen. Herlaad de pagina en controleer het maandoverzicht.':'Er is niets gewijzigd.')
 
   // Datumcontrole: spoort prestaties op waarvan de datum niet klopt met de planning
   // van die week — bv. entries van een (intussen verwijderde) spooksessie, of van
@@ -916,12 +1008,13 @@ function Maand({inst,entries,paid,sched,att,conf,onSavePaid,onRefresh,onLog}){
       const finalEnt=cEnt.filter(e=>!delIds.has(e.id))
       _recordSelf('sw_ent',finalEnt)
       await dbSet('sw_ent',finalEnt)
+      onApplied({entries:finalEnt}) // scherm meteen bijwerken, ook als verversen straks mislukt
       onLog('datumcontrole',`Datumcontrole ${MNL[mo]} ${yr}: ${ghosts.length} spookprestatie(s) verwijderd (${euro(tot)}): ${ghosts.map(g=>`${nmOf(g.e.instId)} ${g.e.date} ${g.e.hours}u`).join('; ')}`)
-      await onRefresh()
+      await safeRefresh()
       alert(`✓ ${ghosts.length} spookprestatie(s) verwijderd. Controleer het maandoverzicht en vul waar nodig correcte uren aan via 'Uren invoeren'.`)
     }catch(err){
       console.error('Datumcontrole mislukt:',err)
-      alert('⚠ Datumcontrole mislukt: '+(err?.message||err)+'\nEr is niets gewijzigd.')
+      alert(failMsg('Datumcontrole',err,false)) // enige schrijfactie is de laatste stap vóór onApplied
     }finally{
       setBusy(false)
     }
@@ -936,6 +1029,7 @@ function Maand({inst,entries,paid,sched,att,conf,onSavePaid,onRefresh,onLog}){
   const handleHerbereken=async()=>{
     if(busy)return
     setBusy(true)
+    let wrote=false
     try{
       // Verse data ophalen zodat we niet op mogelijk verouderde lokale state rekenen
       const[fi,fe,fs,fa,fc]=await Promise.all([dbGet('sw_inst'),dbGet('sw_ent'),dbGet('sw_sched'),dbGet('sw_att'),dbGet('sw_conf')])
@@ -1021,7 +1115,7 @@ function Maand({inst,entries,paid,sched,att,conf,onSavePaid,onRefresh,onLog}){
         alert(`✓ Alles is al up-to-date voor ${MNL[mo]} ${yr} — geen verschillen gevonden tussen aanwezigheidsdata en maandoverzicht.${warnings.length?`\n\n⚠ ${warnings.join('\n⚠ ')}`:''}${orphanSess.size?`\n\nℹ ${orphanSess.size} bevestigde sessie(s) staan niet meer in de planning en blijven ongewijzigd.`:''}`)
         onLog('herberekening',`Herberekening ${MNL[mo]} ${yr}: geen wijzigingen${warnings.length?` (${warnings.length} waarschuwing(en))`:''}`)
         setHerberekend(true);setTimeout(()=>setHerberekend(false),2500)
-        await onRefresh()
+        await safeRefresh()
         return
       }
 
@@ -1053,14 +1147,17 @@ function Maand({inst,entries,paid,sched,att,conf,onSavePaid,onRefresh,onLog}){
       _recordSelf('sw_ent',finalEnt)
       _recordSelf('sw_conf',finalConf)
       await dbSet('sw_ent',finalEnt)
+      wrote=true
+      onApplied({entries:finalEnt})
       await dbSet('sw_conf',finalConf)
+      onApplied({conf:finalConf}) // scherm meteen bijwerken, ook als verversen straks mislukt
       onLog('herberekening',`Herberekening ${MNL[mo]} ${yr}: ${changedRefs.length} sessie(s) bijgewerkt${diffs.length?` — totalen gewijzigd voor: ${diffs.map(d=>d.name).join(', ')}`:''}${warnings.length?` (${warnings.length} waarschuwing(en))`:''}`)
-      await onRefresh()
+      await safeRefresh()
       setHerberekend(true)
       setTimeout(()=>setHerberekend(false),2500)
     }catch(err){
       console.error('Herberekening mislukt:',err)
-      alert('⚠ Herberekening mislukt: '+(err?.message||err)+'\nEr is niets gewijzigd.')
+      alert(failMsg('Herberekening',err,wrote))
     }finally{
       setBusy(false)
     }
